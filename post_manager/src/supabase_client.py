@@ -131,13 +131,22 @@ def get_urls_where_comment_not_found() -> set[str]:
 
 def last_comment_update_urls() -> set[str]:
     """
-    Get post URLs where updated_at is NOT null and equals today's date.
+    Get post URLs updated during the current UTC day.
+
+    These URLs are considered already processed today and should be skipped.
+
     Returns:
-        Set of post URLs with updated_at = today
+        Set of post URLs with updated_at in [today 00:00:00, tomorrow 00:00:00)
     """
 
     client = get_supabase_client()
-    today = datetime.now(UTC).date().isoformat()
+    now_utc = datetime.now(UTC)
+    today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_start = today_start + timedelta(days=1)
+
+    # Column is timestamp without timezone in UTC. Use naive datetime strings.
+    today_start_str = today_start.replace(tzinfo=None).isoformat()
+    tomorrow_start_str = tomorrow_start.replace(tzinfo=None).isoformat()
 
     urls = set()
     batch_size = 1000
@@ -147,7 +156,8 @@ def last_comment_update_urls() -> set[str]:
             client.table(TABLE_NAME)
             .select("post_url")
             .not_.is_("updated_at", None)
-            .eq("updated_at", today)
+            .gte("updated_at", today_start_str)
+            .lt("updated_at", tomorrow_start_str)
             .range(offset, offset + batch_size - 1)
             .execute()
         )
@@ -250,7 +260,6 @@ def upsert_post(post: Post) -> Post | None:
         "has_next_comments": post.has_next_comments,
         "first_comments": post.first_comments,
         "post_exists": post.post_exists,
-        "updated_at": datetime.now(UTC).isoformat(),
     }
 
     # Upsert based on post_url
@@ -288,7 +297,6 @@ def bulk_upsert_posts(posts: list[Post]) -> int:
             "has_next_comments": p.has_next_comments,
             "first_comments": p.first_comments,
             "post_exists": p.post_exists,
-            "updated_at": datetime.now(UTC).isoformat(),
         }
         for p in posts
     ]
