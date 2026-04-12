@@ -53,7 +53,7 @@ class Post(BaseModel):
         default=None, ge=0, description="Number of comments on the post"
     )
 
-    has_next_comments: int = Field(
+    has_next_comments: bool = Field(
         default=True,
         description="Indicates if there are more comments to fetch beyond the first batch",
     )

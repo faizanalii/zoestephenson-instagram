@@ -1,0 +1,93 @@
+# =============================================================================
+# Docker Compose - Redis for Distributed Job Queue
+# =============================================================================
+# Deploy with: docker-compose up -d
+# View logs:   docker-compose logs -f redis
+# Stop:        docker-compose down
+# =============================================================================
+
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis-coordinator
+    restart: unless-stopped
+    
+    # Use custom configuration
+    command: redis-server /usr/local/etc/redis/redis.conf
+    
+    # Mount configuration and data
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    
+    # Expose Redis port
+    ports:
+      - "6379:6379"
+    
+    # Health check for container orchestration
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "YOUR_STRONG_PASSWORD_HERE", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    
+    # Resource limits (adjust based on server capacity)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2.5G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Performance tuning
+    sysctls:
+      - net.core.somaxconn=511
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    
+    # Network configuration
+    networks:
+      - redis-network
+
+  # Optional: Redis Commander (Web UI for debugging)
+  # Access at http://localhost:8081
+  # DISABLE IN PRODUCTION - for development only
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    restart: unless-stopped
+    profiles:
+      - debug  # Only starts with: docker-compose --profile debug up -d
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:YOUR_STRONG_PASSWORD_HERE
+      - HTTP_USER=admin
+      - HTTP_PASSWORD=admin_password_change_me
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - redis-network
+
+# Persistent volume for Redis data
+volumes:
+  redis-data:
+    driver: local
+    name: redis-coordinator-data
+
+# Network for Redis services
+networks:
+  redis-network:
+    driver: bridge
+    name: redis-network

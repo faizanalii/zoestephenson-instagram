@@ -20,7 +20,7 @@ def _get_sheet(sheet_id: str, worksheet_name: str = "MASTER"):
         creds: Credentials = Credentials.from_service_account_file(
             SHEETS_CREDENTIALS_FILE, scopes=scopes
         )
-        client = gspread.authorize(auth=creds)  # type: ignore
+        client = gspread.authorize(creds)  # type: ignore
         return client.open_by_key(sheet_id).worksheet(worksheet_name)
     except FileNotFoundError as e:
         raise FileNotFoundError(f"Credentials file not found: {SHEETS_CREDENTIALS_FILE}") from e

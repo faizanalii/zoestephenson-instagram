@@ -277,3 +277,27 @@ async def get_all_post_urls_in_processing_queue() -> set[str]:
             continue
 
     return video_urls
+
+
+async def is_video_url_in_queue(post_url: str, queue_key: str) -> bool:
+    """
+    Docstring for is_video_url_in_queue
+
+    :param post_url: Description
+    :type post_url: str
+    :param queue_key: Description
+    :type queue_key: str
+    :return: Description
+    :rtype: bool
+    """
+
+    client = await get_redis_client()
+
+    for item in client.lrange(queue_key, 0, -1):  # type: ignore[assignment]
+        try:
+            job = json.loads(item)
+            if job.get("post_url") == post_url:
+                return True
+        except Exception:
+            continue
+    return False

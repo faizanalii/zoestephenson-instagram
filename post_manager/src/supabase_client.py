@@ -5,6 +5,7 @@ Supabase Client for Video Manager
 Provides Supabase connection for checking existing videos and upserting new ones.
 """
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -19,6 +20,23 @@ from src.settings import ERROR_TABLE_NAME, SUPABASE_KEY, SUPABASE_URL, TABLE_NAM
 # =============================================================================
 
 _supabase_client: Client | None = None
+
+
+def _normalize_first_comments(raw_data: dict[str, Any]) -> dict[str, Any]:
+    """Ensure first_comments is a Python list for Post model parsing."""
+    value = raw_data.get("first_comments")
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                raw_data["first_comments"] = parsed
+            else:
+                raw_data["first_comments"] = []
+        except Exception:
+            raw_data["first_comments"] = []
+    elif value is None:
+        raw_data["first_comments"] = []
+    return raw_data
 
 
 def get_supabase_client() -> Client:
@@ -88,7 +106,7 @@ def get_urls_where_comment_not_found() -> set[str]:
     Get post URLs where comments_exist is False and the row is older than 2 days.
 
     Returns:
-        Set of post URLs with comments_exist = False and update_at older than 2 days
+        Set of post URLs with comments_exist = False and updated_at older than 2 days
     """
     client = get_supabase_client()
     cutoff = (datetime.now(UTC) - timedelta(days=2)).isoformat()
@@ -97,8 +115,8 @@ def get_urls_where_comment_not_found() -> set[str]:
         client.table(TABLE_NAME)
         .select("post_url")
         .eq("comment_exists", False)
-        .not_.is_("update_at", None)
-        .lt("update_at", cutoff)
+        .not_.is_("updated_at", None)
+        .lt("updated_at", cutoff)
         .execute()
     )
 
@@ -113,9 +131,9 @@ def get_urls_where_comment_not_found() -> set[str]:
 
 def last_comment_update_urls() -> set[str]:
     """
-    Get post URLs where last_comment_update is NOT null and equals today's date.
+    Get post URLs where updated_at is NOT null and equals today's date.
     Returns:
-        Set of post URLs with last_comment_update = today
+        Set of post URLs with updated_at = today
     """
 
     client = get_supabase_client()
@@ -128,8 +146,8 @@ def last_comment_update_urls() -> set[str]:
         response = (
             client.table(TABLE_NAME)
             .select("post_url")
-            .not_.is_("last_comment_update", None)
-            .eq("last_comment_update", today)
+            .not_.is_("updated_at", None)
+            .eq("updated_at", today)
             .range(offset, offset + batch_size - 1)
             .execute()
         )
@@ -161,6 +179,7 @@ def get_post_by_url(post_url: str) -> Post | None:
 
     if response.data:
         raw_data: dict[str, Any] = response.data[0]  # type: ignore[assignment]
+        raw_data = _normalize_first_comments(raw_data)
         return Post(**raw_data)
     return None
 
@@ -200,7 +219,9 @@ def get_posts_by_urls(post_urls: list[str]) -> list[Post]:
 
         for row in response.data:
             try:
-                posts.append(Post(**row))  # type: ignore[call-arg]
+                row_data: dict[str, Any] = row  # type: ignore[assignment]
+                row_data = _normalize_first_comments(row_data)
+                posts.append(Post(**row_data))  # type: ignore[call-arg]
             except Exception as e:
                 logging.error(f"Error parsing post data: {e} - Data: {row}")
                 continue
@@ -229,13 +250,16 @@ def upsert_post(post: Post) -> Post | None:
         "has_next_comments": post.has_next_comments,
         "first_comments": post.first_comments,
         "post_exists": post.post_exists,
+        "updated_at": datetime.now(UTC).isoformat(),
     }
 
     # Upsert based on post_url
     response = client.table(TABLE_NAME).upsert(insert_data, on_conflict="post_url").execute()
 
     if response.data:
-        return Post(**response.data[0])  # type: ignore[call-arg]
+        raw_data: dict[str, Any] = response.data[0]  # type: ignore[assignment]
+        raw_data = _normalize_first_comments(raw_data)
+        return Post(**raw_data)  # type: ignore[call-arg]
     return None
 
 
@@ -264,6 +288,7 @@ def bulk_upsert_posts(posts: list[Post]) -> int:
             "has_next_comments": p.has_next_comments,
             "first_comments": p.first_comments,
             "post_exists": p.post_exists,
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         for p in posts
     ]
