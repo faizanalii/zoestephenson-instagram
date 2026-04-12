@@ -257,7 +257,7 @@ async def remove_url_from_processing_queue(post_url: str) -> bool:
 
 async def get_all_post_urls_in_processing_queue() -> set[str]:
     """
-    Docstring for get_all_video_urls_in_queue
+    Docstring for get_all_post_urls_in_processing_queue
 
     :param queue_key: Description
     :type queue_key: str

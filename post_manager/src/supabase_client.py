@@ -6,7 +6,7 @@ Provides Supabase connection for checking existing videos and upserting new ones
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from supabase import Client, create_client
@@ -85,14 +85,22 @@ def get_existing_post_urls(post_urls: list[str]) -> set[str]:
 
 def get_urls_where_comment_not_found() -> set[str]:
     """
-    Get post URLs where comments_exist is False.
+    Get post URLs where comments_exist is False and the row is older than 2 days.
 
     Returns:
-        Set of post URLs with comments_exist = False
+        Set of post URLs with comments_exist = False and update_at older than 2 days
     """
     client = get_supabase_client()
+    cutoff = (datetime.now(UTC) - timedelta(days=2)).isoformat()
 
-    response = client.table(TABLE_NAME).select("post_url").eq("comment_exists", False).execute()
+    response = (
+        client.table(TABLE_NAME)
+        .select("post_url")
+        .eq("comment_exists", False)
+        .not_.is_("update_at", None)
+        .lt("update_at", cutoff)
+        .execute()
+    )
 
     urls = set()
     if response.data:
