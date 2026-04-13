@@ -339,3 +339,18 @@ def push_error_post(post_url: str, error_message: str) -> None:
     logging.info(f"Logged error for post {post_url} with message: {error_message}")
 
     return None
+
+
+def get_first_comments(post_url: str) -> list[dict[str, Any]] | None:
+    """
+    Get the first comments for a post by its URL.
+
+    Args:
+        post_url: Instagram post URL
+    Returns:
+        List of first comments or None if not found
+    """
+    post = get_post_by_url(post_url)
+    if post and post.first_comments is not None:
+        return post.first_comments
+    return None

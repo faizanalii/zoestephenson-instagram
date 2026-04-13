@@ -8,6 +8,15 @@ from curl_cffi.requests.models import Response
 
 
 def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str, str]:
+    """
+    Builds the headers for the GraphQL query request.
+    Args:
+        csrf_token: The CSRF token extracted from the post page.
+        app_id: The Instagram app ID extracted from the post page.
+        post_id: The post ID extracted from the post page.
+    Returns:
+        A dictionary of headers to include in the GraphQL query request.
+    """
     return {
         "accept": "*/*",
         "accept-language": "en-US,en;q=0.9,ur;q=0.8",
@@ -95,14 +104,14 @@ def build_query_data_dynamic(
     return data
 
 
-def run_graphql_query(
+async def run_graphql_query(
     csrf_token: str,
     app_id: str,
     media_id: str,
     post_id: str,
+    proxy: str,
     comment_cursor_bifilter_token: dict[str, Any],
     cookies: dict[str, str] | None = None,
-    proxy: str | None = None,
     lsd_token: str | None = None,
     hmac_claim: str | None = None,
     fb_dtsg: str | None = None,
@@ -112,6 +121,32 @@ def run_graphql_query(
     session: requests.Session | None = None,
     timeout: float | None = None,
 ) -> Response:
+    """
+    Runs a GraphQL query to fetch Instagram comments.
+    Args:
+        csrf_token: The CSRF token extracted from the post page.
+        app_id: The Instagram app ID extracted from the post page.
+        media_id: The media ID of the post extracted from the post page.
+        post_id: The post ID extracted from the post page.
+        comment_cursor_bifilter_token: The bifilter token for
+        pagination extracted from the post page
+        cookies: Optional cookies to include in the request.
+        proxy: Optional proxy to route the request through.
+        lsd_token: Optional LSD token extracted from the post page.
+        hmac_claim: Optional HMAC claim extracted from the post page.
+        fb_dtsg: Optional fb_dtsg token extracted from the post page.
+        include_requested_with: Whether to include the X-Requested-With header in the request.
+        extra_headers: Any additional headers to include in the request.
+        extra_data: Any additional form data to include in the request body.
+        session: An optional requests.Session object to use for making the request. If not provided,
+        a new session will be created for each call.
+        timeout: An optional timeout value (in seconds) for the request. If not provided,
+        no timeout will be set.
+    Returns:
+        The Response object returned by the requests library after making the POST request
+        to the Instagram GraphQL endpoint.
+    """
+
     headers = build_headers_dynamic(
         csrf_token=csrf_token,
         app_id=app_id,

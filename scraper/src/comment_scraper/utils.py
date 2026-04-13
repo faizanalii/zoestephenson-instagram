@@ -7,7 +7,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from bs4 import BeautifulSoup
+from jsonparse import find_key
+
 from src.models import CommentStats
+from src.settings import PROXY, PROXY_COUNTRIES_LIST
 
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
 
@@ -23,6 +27,233 @@ SENSITIVE_KEYS = {
 }
 
 
+async def get_random_proxy() -> str:
+    """
+    Get a random proxy from the list of available proxies.
+    Args:
+    Returns:
+        str: A random proxy string.
+    """
+
+    country: str = random.choice(PROXY_COUNTRIES_LIST)
+    proxy_url: str = PROXY.format(COUNTRY=country)
+
+    return proxy_url
+
+
+async def get_scripts_from_profile_page(html: str) -> list[dict[str, Any]]:
+    """
+    Get the scripts from the profile page response.
+    Args:
+        html (str): The HTML content of the profile page.
+    Returns:
+        list[dict[str, Any]]: A list of dictionaries containing the JSON data
+        from each script tag.
+    """
+
+    soup = BeautifulSoup(html, "html.parser")
+    scripts = soup.find_all("script", attrs={"type": "application/json"})
+    json_scripts: list[dict[str, Any]] = []
+
+    for script in scripts:
+        try:
+            json_data: dict[str, Any] = json.loads(script.text)
+            json_scripts.append(json_data)
+        except Exception:  # noqa: BLE001
+            continue
+
+    return json_scripts
+
+
+async def get_csrf_token(scripts: list[dict[str, Any]]) -> str | None:
+    """
+    Get the CSRF token from the scripts
+    Args:
+        :list[dict]: The list of scripts containing the CSRF token.
+    Returns:
+        str: The CSRF token.
+    """
+    for script in scripts:
+        csrf_token: list[str] = find_key(script, "csrf_token")
+
+        if not csrf_token:
+            continue
+        return csrf_token[0]
+
+    return None
+
+
+async def get_app_id(scripts: list[dict[str, Any]]) -> str | None:
+    """
+    Get the Instagram app ID from the scripts.
+    Args:
+        :list[dict]: The list of scripts containing the app ID.
+    Returns:
+        str: The app ID.
+    """
+
+    for data in scripts:
+        app_id: list[str] = find_key(data, "app_id")
+        if not app_id:
+            continue
+        return app_id[0]
+
+    return None
+
+
+async def get_media_id(scripts: list[dict[str, Any]]) -> str | None:
+    """
+    Get the media ID from the scripts.
+    Args:
+        :list[dict]: The list of scripts containing the media ID.
+    Returns:
+        str: The media ID.
+    """
+
+    for script in scripts:
+        media_id: list[str] = find_key(script, "media_id")
+
+        if not media_id:
+            continue
+        return media_id[0]
+
+    return None
+
+
+async def get_hmac_claim(scripts: list[dict[str, Any]]) -> str | None:
+    """
+    Get the HMAC claim from the scripts.
+    Args:
+        :list[dict]: The list of scripts containing the HMAC claim.
+    Returns:
+        str: The HMAC claim.
+    """
+    for script in scripts:
+        hmac_claim: list[str] = find_key(script, "claim")
+        if not hmac_claim:
+            continue
+        return hmac_claim[0]
+
+    return None
+
+
+async def get_first_comments(json_scripts: list) -> list | None:
+    """
+    Get the first comments from the scripts.
+    Args:
+        json_scripts (list): The list of scripts containing the first comments.
+    Returns:
+        str: The first comments.
+    """
+    for data in json_scripts:
+        first_comments: list = find_key(data, "xdt_api__v1__media__media_id__comments__connection")
+
+        if not first_comments:
+            continue
+
+        comments: dict[str, Any] = first_comments[0]
+
+        edges: list[dict[str, Any]] = comments.get("edges", [])
+
+        if not edges:
+            continue
+
+        return edges
+
+    return None
+
+
+async def has_next_comments(json_scripts: list) -> bool:
+    """
+    Check if there are more comments to load.
+    Args:
+        json_scripts (list): The list of scripts containing the comments data.
+    Returns:
+        bool: True if there are more comments to load, False otherwise.
+    """
+    for data in json_scripts:
+        comments_data: list = find_key(data, "xdt_api__v1__media__media_id__comments__connection")
+
+        if not comments_data:
+            continue
+
+        comments: dict[str, Any] = comments_data[0]
+
+        page_info: dict[str, Any] = comments.get("page_info", {})
+
+        has_next_page: bool = page_info.get("has_next_page", False)
+
+        return has_next_page
+
+    return False
+
+
+async def get_cached_comment_cursor(scripts: list[BeautifulSoup]) -> str | None:
+    """
+    Get the cached comment cursor from the scripts.
+    Args:
+        :list[dict]: The list of scripts containing the cached comment cursor.
+    Returns:
+        str: The cached comment cursor.
+    """
+    for script in scripts:
+        try:
+            data = json.loads(script.text)
+        except:
+            continue
+        cached_comment_cursor: list[str] = find_key(data, "cached_comments_cursor")
+        if not cached_comment_cursor:
+            continue
+        return cached_comment_cursor[0]
+
+    return None
+
+
+async def get_comment_and_bifilter_token(
+    scripts: list[dict[str, Any]],
+) -> dict[str, str] | None:
+    """
+    Get the comment and bifilter token from the scripts.
+    Args:
+        :list[dict]: The list of scripts containing the bifilter token.
+    Returns:
+        str: The bifilter token.
+    """
+    for script in scripts:
+        end_cursor: list[str] = find_key(script, "end_cursor")
+
+        if not end_cursor:
+            continue
+
+        # Skip the first script if it contains end_cursor
+
+        cursor_data: dict[str, str] = json.loads(end_cursor[0])
+
+        return cursor_data
+
+    return None
+
+
+async def get_comment_count(json_scripts: list) -> int:
+    """
+    Extract the comment count from the JSON scripts.
+    Args:
+        json_scripts (list): A list of JSON data extracted from script tags.
+    Returns:
+        int: The comment count extracted from the JSON data, or -1 if not found.
+    """
+
+    for data in json_scripts:
+        comment_count: list[int] = find_key(data, "comment_count")
+
+        if not comment_count:
+            continue
+
+        return comment_count[0]
+
+    return 0
+
+
 def normalize_post_url(post_url: str) -> str:
     """Normalizes a post URL into a stable format without trailing slash noise."""
 
@@ -36,7 +267,7 @@ def extract_post_id(post_url: str) -> str:
     return normalized.split("/")[-1]
 
 
-def parse_end_cursor(raw_end_cursor: str | None) -> dict[str, Any] | None:
+async def parse_end_cursor(raw_end_cursor: str | None) -> dict[str, Any] | None:
     """Parses GraphQL end_cursor into a dictionary cursor used for subsequent requests."""
 
     if not raw_end_cursor:
@@ -47,28 +278,35 @@ def parse_end_cursor(raw_end_cursor: str | None) -> dict[str, Any] | None:
         return None
 
 
-def parse_connection(payload: dict[str, Any]) -> dict[str, Any]:
+async def parse_connection(payload: dict[str, Any]) -> dict[str, Any]:
     """Returns the Instagram comments connection object from a GraphQL payload."""
 
     return payload.get("data", {}).get("xdt_api__v1__media__media_id__comments__connection", {})
 
 
-def parse_page_info(
+async def parse_page_info(
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, bool | None]:
-    """Extracts cursor and has_next_page from GraphQL response payload."""
+    """
+    Extracts cursor and has_next_page from GraphQL response payload.
+    Args:
+        payload: The dictionary containing the API response.
+    Returns:
+        A tuple containing the next cursor (or None if not found) and a boolean indicating
+        whether there are more pages of comments to load.
+    """
 
-    connection = parse_connection(payload)
+    connection = await parse_connection(payload)
     page_info = connection.get("page_info", {})
-    next_cursor = parse_end_cursor(page_info.get("end_cursor"))
+    next_cursor = await parse_end_cursor(page_info.get("end_cursor"))
     has_next_page = page_info.get("has_next_page")
     return next_cursor, has_next_page
 
 
-def extract_edges(payload: dict[str, Any]) -> list[dict[str, Any]]:
+async def extract_edges(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Extracts comments edges list from GraphQL response payload."""
 
-    connection = parse_connection(payload)
+    connection = await parse_connection(payload)
     edges = connection.get("edges", [])
     if not isinstance(edges, list):
         return []
@@ -87,7 +325,7 @@ def build_retry_at(delay_seconds: int) -> datetime:
     return datetime.now(UTC) + timedelta(seconds=delay_seconds)
 
 
-def should_process_retry(retry_at: datetime | None, now: datetime | None = None) -> bool:
+async def should_process_retry(retry_at: datetime | None, now: datetime | None = None) -> bool:
     """Returns True when retry gate is open and task can be processed now."""
 
     if retry_at is None:
@@ -96,7 +334,7 @@ def should_process_retry(retry_at: datetime | None, now: datetime | None = None)
     return current >= retry_at
 
 
-def normalize_comment_list(comments: Any) -> list[dict[str, Any]]:
+async def normalize_comment_list(comments: Any) -> list[dict[str, Any]]:
     """Normalizes database/API comments into list form expected by search_comment."""
 
     if comments is None:
@@ -115,47 +353,6 @@ async def utc_stamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
 
-async def make_run_dir(prefix: str) -> Path:
-    """
-    Create a directory for storing run data.
-    Args:
-        prefix: A string prefix to include in the directory name (e.g., "comments").
-    Returns:
-        path: The Path object of the created directory.
-    """
-    run_dir = RUNS_DIR / f"{prefix}_{await utc_stamp()}"
-    run_dir.mkdir(parents=True, exist_ok=False)
-    return run_dir
-
-
-async def write_json(path: Path, payload: Any) -> None:
-    """
-    Write a JSON payload to a file, creating parent directories if needed.
-    Args:
-        path: The file path to write to.
-        payload: The data to write as JSON.
-    Returns:
-        None
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2, ensure_ascii=False)
-
-
-async def write_text(path: Path, text: str) -> None:
-    """
-    Write text to a file, creating parent directories if needed.
-    Args:
-        path: The file path to write to.
-        text: The text to write.
-    Returns:
-        None
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        file.write(text)
-
-
 async def normalize_content_type(content_type: str | None) -> str:
     """
     Normalize the content type by removing any parameters.
@@ -167,50 +364,6 @@ async def normalize_content_type(content_type: str | None) -> str:
     if not content_type:
         return ""
     return content_type.split(";", 1)[0].strip().lower()
-
-
-async def classify_response(
-    status_code: int,
-    content_type: str | None,
-    body_text: str,
-) -> str:
-    """
-    Classify the response based on its status code, content type, and body text.
-    Args:
-        status_code: The HTTP status code.
-        content_type: The content type string.
-        body_text: The body text of the response.
-    Returns:
-        The classification of the response.
-    """
-    normalized = await normalize_content_type(content_type)
-    body_head = body_text.lstrip()[:200].lower()
-
-    if "json" in normalized:
-        return "json"
-    if normalized in {"text/javascript", "application/javascript", "text/plain"}:
-        if body_head.startswith("{") or body_head.startswith("["):
-            return "json"
-    if body_head.startswith("{") or body_head.startswith("["):
-        return "json"
-    if body_head.startswith("<!doctype html") or body_head.startswith("<html"):
-        return "html"
-    if status_code >= 400:
-        return "http_error"
-    return "unknown"
-
-
-async def summarize_body(body_text: str, max_chars: int = 500) -> str:
-    """
-    Create a short summary of the body text for logging, with newlines removed.
-    Args:
-        body_text: The text to summarize.
-        max_chars: The maximum number of characters to include in the summary.
-    Returns:
-        A summarized version of the body text.
-    """
-    summary = body_text[:max_chars]
-    return summary.replace("\n", " ").replace("\r", " ")
 
 
 async def extract_html_markers(html: str) -> dict[str, bool]:
@@ -268,20 +421,6 @@ async def extract_dtsg_token(html: str) -> str | None:
         if match:
             return match.group(1)
     return None
-
-
-async def extract_claim_token(html: str) -> str | None:
-    """
-    Extract the claim token from HTML content.
-    Args:
-        html: The HTML string to search for the claim token.
-    Returns:
-        The extracted claim token, or None if not found.
-    """
-    match = re.search(r'"claim":"([^"]+)"', html)
-    if not match:
-        return None
-    return match.group(1)
 
 
 async def extract_rate_limit_error(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -353,3 +492,34 @@ async def search_comment(
                 date_of_comment=comment.get("created_at", ""),
             )
     return None
+
+
+async def classify_response(
+    status_code: int,
+    content_type: str | None,
+    body_text: str,
+) -> str:
+    """
+    Classify the response based on its status code and content.
+    Args:
+        status_code: The HTTP status code.
+        content_type: The content type of the response.
+        body_text: The text of the response body.
+    Returns:
+        A string indicating the classification of the response.
+    """
+    normalized = await normalize_content_type(content_type)
+    body_head = body_text.lstrip()[:200].lower()
+
+    if "json" in normalized:
+        return "json"
+    if normalized in {"text/javascript", "application/javascript", "text/plain"}:
+        if body_head.startswith("{") or body_head.startswith("["):
+            return "json"
+    if body_head.startswith("{") or body_head.startswith("["):
+        return "json"
+    if body_head.startswith("<!doctype html") or body_head.startswith("<html"):
+        return "html"
+    if status_code >= 400:
+        return "http_error"
+    return "unknown"

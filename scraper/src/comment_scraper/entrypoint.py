@@ -3,10 +3,17 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from .orchestrator import run
+from src.comment_scraper.orchestrator import run
 
 
 def find_comment(post_url: str, username: str) -> Any:
-    """Entry point that returns matching comment model or None for a post URL and username."""
+    """
+    Entry point that returns matching comment model or None for a post URL and username.
+    Args:
+        post_url: The URL of the Instagram post to search comments for
+        username: The Instagram username to find in the comments
+    Returns:
+        A CommentStats object if a matching comment is found, or None if not found or an
+    """
 
     return asyncio.run(run(post_url=post_url, username=username))
