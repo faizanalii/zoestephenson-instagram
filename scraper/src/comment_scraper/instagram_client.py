@@ -8,9 +8,9 @@ from typing import Any
 
 from curl_cffi import requests
 from curl_cffi.requests.exceptions import RequestException
+from scraper.src.comment_scraper.post_page import get_post_page
 
 from src.comment_scraper.ig_query_client import run_graphql_query
-from src.comment_scraper.scraper import get_post_page
 from src.comment_scraper.utils import search_comment
 from src.models import AccountCookies, CommentStats, PageRequirements, TaskState
 

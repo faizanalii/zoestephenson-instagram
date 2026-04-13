@@ -12,7 +12,7 @@ from typing import Any
 
 from supabase import Client, create_client
 
-from src.models import Post
+from src.models import CommentNotFound, Post, UpdateCommentCheckDay
 from src.settings import ERROR_TABLE_NAME, SUPABASE_KEY, SUPABASE_URL, TABLE_NAME
 
 # =============================================================================
@@ -354,3 +354,63 @@ def get_first_comments(post_url: str) -> list[dict[str, Any]] | None:
     if post and post.first_comments is not None:
         return post.first_comments
     return None
+
+
+class SupabaseDB:
+    """
+    Minimal Supabase client for cursor updates.
+    """
+
+    def __init__(self):
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise ValueError(
+                "Supabase credentials not found. "
+                "Set SUPABASE_URL and SUPABASE_KEY environment variables."
+            )
+        self.client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+    def comment_not_found(self, update: CommentNotFound) -> bool:
+        """
+        Mark that no comments were found for a video.
+
+        Args:
+            update: CommentNotFound with video_id and comment_exists flag
+        Returns:
+            True if updated successfully
+        """
+        response = (
+            self.client.table(TABLE_NAME)
+            .update(
+                {
+                    "comment_exists": False,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            .eq("post_url", update.video_id)
+            .execute()
+        )
+
+        return len(response.data) > 0
+
+    def update_comment_update_day(self, update: UpdateCommentCheckDay) -> bool:
+        """
+        Update the last_comment_check date to today for a video.
+
+        Args:
+            update: UpdateCommentCheckDay with video_id and last_comment_update date
+        Returns:
+            True if updated successfully
+        """
+        response = (
+            self.client.table(TABLE_NAME)
+            .update(
+                {
+                    "last_comment_update": update.last_comment_update,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            .eq("video_id", update.video_id)
+            .execute()
+        )
+
+        return len(response.data) > 0

@@ -5,8 +5,8 @@ cookies, and any other relevant entities used in the application.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -152,3 +152,19 @@ class PageRequirements:
     lsd_token: str | None
     dtsg_token: str | None
     claim_token: str | None
+
+
+@dataclass
+class CommentNotFound:
+    """Model for marking no comments found."""
+
+    video_id: str
+    comment_exists: bool = False
+
+
+@dataclass
+class UpdateCommentCheckDay:
+    """Model for updating last comment check day."""
+
+    video_id: str
+    last_comment_update: str = field(default_factory=lambda: datetime.now(UTC).date().isoformat())

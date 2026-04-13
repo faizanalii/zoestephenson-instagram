@@ -134,10 +134,10 @@ async def get_cookies() -> dict | None:
         dict with cookie data or None if no cookies available
     """
     client = await get_redis_client()
-    token_json: str = client.lpop(KEY_COOKIES_AVAILABLE)  # type: ignore[assignment]
+    account_cookies: dict[str, dict] = client.lpop(KEY_COOKIES_AVAILABLE)  # type: ignore[assignment]
 
-    if token_json:
-        return json.loads(token_json)
+    if account_cookies:
+        return account_cookies
     return None
 
 
@@ -182,18 +182,18 @@ async def push_posts_to_queue(post_jobs: list[Post], queue_key: str) -> int:
     return result
 
 
-async def pop_post_from_queue(queue_key: str) -> dict | None:
+async def pop_post_from_queue(queue_key: str) -> Post | None:
     """
     Pop the next post job from the front of the queue (FIFO).
 
     Returns:
-        Post job dict or None if queue is empty
+        Post job object or None if queue is empty
     """
     client = await get_redis_client()
     job_json: str = client.lpop(queue_key)  # type: ignore[assignment]
 
     if job_json:
-        return json.loads(job_json)
+        return Post(**json.loads(job_json))
     return None
 
 
@@ -301,3 +301,18 @@ async def is_video_url_in_queue(post_url: str, queue_key: str) -> bool:
         except Exception:
             continue
     return False
+
+
+async def pop_video_from_queue(queue_key: str) -> dict | None:
+    """
+    Pop the next video job from the front of the queue (FIFO).
+
+    Returns:
+        Video job dict or None if queue is empty
+    """
+    client = await get_redis_client()
+    job_json: str = client.lpop(queue_key)  # type: ignore[assignment]
+
+    if job_json:
+        return json.loads(job_json)
+    return None
