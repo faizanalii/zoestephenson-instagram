@@ -44,7 +44,11 @@ def _load_redis_client_module() -> Any:
         raise RuntimeError("Unable to import redis_client module.") from exc
 
 
-async def run(post_url: str, username: str) -> CommentStats | None:
+async def run(
+    post_url: str,
+    username: str,
+    source_queue: str | None = None,
+) -> CommentStats | int | None:
     """Runs the DB-first then pagination fallback pipeline and returns found comment or None."""
 
     normalized_post_url = normalize_post_url(post_url)
@@ -60,20 +64,27 @@ async def run(post_url: str, username: str) -> CommentStats | None:
         if comment:
             return comment
 
+    # TODO: Work on redis client module, it shoudl be direct import not like this
     redis_client_module = _load_redis_client_module()
 
     queue_manager = RedisQueueManager(redis_client_module)
 
-    task = queue_manager.get_task_state(normalized_post_url, username)
+    task = await queue_manager.get_task_state(normalized_post_url, username)
+
+    if source_queue:
+        task.source_queue = source_queue
 
     if not queue_manager.ensure_retry_gate(task):
-        return None
+        return max(1, task.retry_count)
 
-    account = queue_manager.get_account_cookies(task)
+    account = await queue_manager.get_account_cookies(task)
+
     task.account_id = account.account_id
 
-    proxy: str = await get_random_proxy()
+    # TODO:use the same proxy for the retries of the same task
+    proxy: str = task.proxy if task.proxy else await get_random_proxy()
 
+    # TODO: If the page requirements already exist in the persisted variables use them
     page_requirements = await fetch_page_requirements(normalized_post_url, proxy=proxy)
 
     return await paginate_and_search(

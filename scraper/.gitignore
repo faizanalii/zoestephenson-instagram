@@ -1,5 +1,1 @@
-Process the videos, put them into a processing queue
-On time restriction, put them in the processing queue again, and also define when
-they were put in the queue, so that we can check if they have been in the queue for too long and need to be reprocessed
-Give a waiting time of 5 mins and then continue from where it left off
-Keep the cursor and cookies in the processing queue also
+notes.txt

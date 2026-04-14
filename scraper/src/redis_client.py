@@ -23,7 +23,221 @@ from src.settings import (
     REDIS_HOST,
     REDIS_PASSWORD,
     REDIS_PORT,
+    TASK_STATE_PREFIX,
 )
+
+
+def _task_state_key(post_url: str, username: str) -> str:
+    """
+    Build a stable Redis key for a post/username task state.
+    Args:
+        post_url: The URL of the TikTok post
+        username: The username of the user
+    Returns:
+        A string key in the format "instagram:task_state:{post_url}:{username}
+    """
+
+    return f"{TASK_STATE_PREFIX}:{post_url}:{username}"
+
+
+def _safe_json_loads(raw: str) -> dict:
+    """
+    Parse JSON strings from Redis and fallback to empty dict on malformed values.
+    Args:
+        raw: The raw string from Redis
+    Returns:
+        Parsed dict or empty dict if parsing fails"""
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    return {}
+
+
+def _normalize_account_cookie_payload(raw_item: str) -> dict | None:
+    """
+    Normalize cookie payloads from Redis into account_id/cookies shape.
+    Args:
+        raw_item: The raw string item from Redis
+    Returns:
+        Dict with normalized account_id and cookies or None if invalid
+    """
+
+    payload = _safe_json_loads(raw_item)
+    if not payload:
+        return None
+
+    account_id = payload.get("account_id")
+    cookies = payload.get("cookies")
+
+    if isinstance(cookies, dict) and cookies:
+        if account_id:
+            return {"account_id": str(account_id), "cookies": cookies}
+        return {"account_id": "unknown", "cookies": cookies}
+
+    # Some producers store only the cookie mapping itself.
+    if all(isinstance(k, str) for k in payload.keys()) and all(
+        isinstance(v, str) for v in payload.values()
+    ):
+        return {"account_id": str(account_id or "unknown"), "cookies": payload}
+
+    return None
+
+
+async def get_processing_task(post_url: str, username: str) -> dict | None:
+    """
+    Fetch persisted task state for a post/username pair.
+    Args:
+        post_url: The URL of the TikTok post
+        username: The username of the user
+    Returns:
+        Dict with task state or None if no state found
+    """
+
+    client = await get_redis_client()
+
+    key = _task_state_key(post_url, username)
+
+    raw_payload: str | None = client.get(key)  # type: ignore[assignment]
+
+    if not raw_payload:
+        return None
+
+    payload = _safe_json_loads(raw_payload)
+
+    return payload or None
+
+
+async def set_processing_task_state(payload: dict) -> bool:
+    """
+    Persist task state payload for delayed retry/resume behavior.
+    Args:
+        payload: Dict containing at least post_url and username, along with any retry state info
+    Returns:
+        True if state was persisted successfully, False otherwise
+    """
+
+    post_url = str(payload.get("post_url", "")).strip()
+    username = str(payload.get("username", "")).strip()
+
+    if not post_url or not username:
+        return False
+
+    client = await get_redis_client()
+    key = _task_state_key(post_url, username)
+
+    client.set(key, json.dumps(payload))
+
+    return True
+
+
+async def delete_processing_task(post_url: str, username: str) -> bool:
+    """
+    Delete persisted task state for a completed post/username pair.
+    Args:
+        post_url: The URL of the TikTok post
+        username: The username of the user
+    Returns:
+        True if a task state was deleted, False otherwise
+    """
+
+    client = await get_redis_client()
+    key = _task_state_key(post_url, username)
+    deleted: int = client.delete(key)  # type: ignore[assignment]
+    return deleted > 0
+
+
+async def get_cookies_for_account(account_id: str) -> dict | None:
+    """
+    Return cookies for a specific account from the available cookie pool.
+    Args:
+        account_id: The ID of the account to fetch cookies for
+    Returns:
+        Dict with cookies for the account or None if not found
+    """
+
+    client = await get_redis_client()
+
+    for raw_item in client.lrange(KEY_COOKIES_AVAILABLE, 0, -1):  # type: ignore[assignment]
+        payload = _normalize_account_cookie_payload(raw_item)
+
+        if not payload:
+            continue
+
+        if payload.get("account_id") == str(account_id):
+            cookies = payload.get("cookies")
+            if isinstance(cookies, dict) and cookies:
+                return cookies
+    return None
+
+
+async def get_next_account_with_cookies() -> dict | None:
+    """
+    Pop the next account cookie payload from the available cookie queue.
+    Returns:
+        Dict with account_id and cookies or None if no cookies available
+    """
+
+    client = await get_redis_client()
+
+    raw_item: str | None = client.lpop(KEY_COOKIES_AVAILABLE)  # type: ignore[assignment]
+
+    if not raw_item:
+        return None
+
+    return _normalize_account_cookie_payload(raw_item)
+
+
+async def push_processing_task(payload: dict) -> bool:
+    """
+    Compatibility alias used by queue manager to persist retry state.
+    Args:
+        payload: Dict containing at least post_url and username, along with any retry state info
+    Returns:
+        True if state was persisted successfully, False otherwise
+    """
+
+    return await set_processing_task_state(payload)
+
+
+async def enqueue_processing_task(payload: dict) -> bool:
+    """
+    Compatibility alias used by queue manager to persist retry state.
+    Args:
+        payload: Dict containing at least post_url and username, along with any retry state info
+    Returns:
+        True if state was persisted successfully, False otherwise
+    """
+
+    return await set_processing_task_state(payload)
+
+
+async def requeue_processing_task(payload: dict) -> bool:
+    """
+    Compatibility alias used by queue manager to persist retry state.
+    Args:
+        payload: Dict containing at least post_url and username, along with any retry state info
+    Returns:
+        True if state was persisted successfully, False otherwise
+    """
+
+    return await set_processing_task_state(payload)
+
+
+async def put_processing_task(payload: dict) -> bool:
+    """
+    Compatibility alias used by queue manager to persist retry state.
+    Args:
+        payload: Dict containing at least post_url and username, along with any retry state info
+    Returns:
+        True if state was persisted successfully, False otherwise
+    """
+
+    return await set_processing_task_state(payload)
+
 
 # =============================================================================
 # CONNECTION
@@ -230,7 +444,7 @@ async def add_url_to_processing_queue(post_job: Post) -> int:
         New length of the processing queue
     """
     client = await get_redis_client()
-    result: int = client.rpush(PROCESSING_QUEUE, post_job.model_dump_json())  # type: ignore[assignment]
+    result: int = client.rpush(PROCESSING_QUEUE, post_job.post_url)  # type: ignore[assignment]
     return result
 
 

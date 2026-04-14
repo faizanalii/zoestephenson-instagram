@@ -127,9 +127,14 @@ class TaskState:
     post_url: str
     username: str
     account_id: str | None = None
+    source_queue: str | None = None
     requeued: bool = False
     retry_at: datetime | None = None
     variables: dict[str, Any] | None = None
+    retry_count: int = 0
+    proxy: str | None = None
+    last_cursor_at: datetime | None = None
+    last_error: str | None = None
 
 
 @dataclass(slots=True)

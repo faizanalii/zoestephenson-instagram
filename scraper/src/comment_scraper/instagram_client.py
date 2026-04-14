@@ -13,6 +13,7 @@ from scraper.src.comment_scraper.post_page import get_post_page
 from src.comment_scraper.ig_query_client import run_graphql_query
 from src.comment_scraper.utils import search_comment
 from src.models import AccountCookies, CommentStats, PageRequirements, TaskState
+from src.settings import CURSOR_MAX_AGE_SECONDS, MAX_PAGINATION_RETRIES
 
 from .queue_manager import RedisQueueManager
 from .utils import (
@@ -28,6 +29,7 @@ from .utils import (
     get_hmac_claim,
     get_media_id,
     get_scripts_from_profile_page,
+    is_cursor_stale,
     parse_page_info,
 )
 
@@ -108,7 +110,7 @@ async def paginate_and_search(
     proxy: str,
     page_requirements: PageRequirements,
     queue_manager: RedisQueueManager,
-) -> CommentStats | None:
+) -> CommentStats | int | None:
     """
     Paginates Instagram comments and searches username after each API page
     until found or exhausted.
@@ -125,6 +127,9 @@ async def paginate_and_search(
     session.cookies.update(account.cookies)
 
     cursor = task.variables or page_requirements.cursor
+
+    if is_cursor_stale(task.last_cursor_at, max_age_seconds=CURSOR_MAX_AGE_SECONDS):
+        cursor = page_requirements.cursor
 
     while True:
         try:
@@ -144,10 +149,19 @@ async def paginate_and_search(
                 timeout=120.0,
             )
         except RequestException:
-            queue_manager.requeue_task(task, variables=cursor)
-            return None
+            retry_count = await queue_manager.requeue_task(
+                task,
+                variables=cursor,
+                failure_reason="request_exception",
+            )
+
+            if retry_count > MAX_PAGINATION_RETRIES:
+                return None
+
+            return retry_count
 
         body = response.text
+
         kind = await classify_response(
             response.status_code,
             response.headers.get("content-type"),
@@ -160,14 +174,26 @@ async def paginate_and_search(
             try:
                 payload = response.json()
                 if await _is_restriction_response(response.status_code, kind, payload):
-                    queue_manager.requeue_task(task, variables=cursor)
-                    return None
+                    retry_count = await queue_manager.requeue_task(
+                        task,
+                        variables=cursor,
+                        failure_reason="restriction_response",
+                    )
+                    if retry_count > MAX_PAGINATION_RETRIES:
+                        return None
+                    return retry_count
             except json.JSONDecodeError:
                 payload = None
 
         if payload is None:
-            queue_manager.requeue_task(task, variables=cursor)
-            return None
+            retry_count = await queue_manager.requeue_task(
+                task,
+                variables=cursor,
+                failure_reason="invalid_payload",
+            )
+            if retry_count > MAX_PAGINATION_RETRIES:
+                return None
+            return retry_count
 
         edges = await extract_edges(payload)
 

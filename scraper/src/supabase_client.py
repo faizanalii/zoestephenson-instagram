@@ -12,8 +12,14 @@ from typing import Any
 
 from supabase import Client, create_client
 
-from src.models import CommentNotFound, Post, UpdateCommentCheckDay
-from src.settings import ERROR_TABLE_NAME, SUPABASE_KEY, SUPABASE_URL, TABLE_NAME
+from src.models import CommentNotFound, CommentStats, Post, UpdateCommentCheckDay
+from src.settings import (
+    ERROR_TABLE_NAME,
+    SUPABASE_KEY,
+    SUPABASE_STATS_TABLE_NAME,
+    SUPABASE_URL,
+    TABLE_NAME,
+)
 
 # =============================================================================
 # SUPABASE CLIENT
@@ -378,19 +384,25 @@ class SupabaseDB:
         Returns:
             True if updated successfully
         """
-        response = (
-            self.client.table(TABLE_NAME)
-            .update(
-                {
-                    "comment_exists": False,
-                    "updated_at": datetime.now(UTC).isoformat(),
-                }
+        try:
+            response = (
+                self.client.table(TABLE_NAME)
+                .update(
+                    {
+                        "comment_exists": False,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                    }
+                )
+                .eq("post_url", update.video_id)
+                .execute()
             )
-            .eq("post_url", update.video_id)
-            .execute()
-        )
-
-        return len(response.data) > 0
+            updated = len(response.data) > 0
+            if not updated:
+                logging.warning("comment_not_found updated 0 rows for post_url=%s", update.video_id)
+            return updated
+        except Exception as exc:
+            logging.error("comment_not_found failed for post_url=%s: %s", update.video_id, exc)
+            return False
 
     def update_comment_update_day(self, update: UpdateCommentCheckDay) -> bool:
         """
@@ -401,16 +413,55 @@ class SupabaseDB:
         Returns:
             True if updated successfully
         """
-        response = (
-            self.client.table(TABLE_NAME)
-            .update(
-                {
-                    "last_comment_update": update.last_comment_update,
-                    "updated_at": datetime.now(UTC).isoformat(),
-                }
+        try:
+            response = (
+                self.client.table(TABLE_NAME)
+                .update(
+                    {
+                        "last_comment_update": update.last_comment_update,
+                        "comment_exists": True,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                    }
+                )
+                .eq("post_url", update.video_id)
+                .execute()
             )
-            .eq("video_id", update.video_id)
-            .execute()
-        )
+            updated = len(response.data) > 0
+            if not updated:
+                logging.warning(
+                    "update_comment_update_day updated 0 rows for post_url=%s",
+                    update.video_id,
+                )
+            return updated
+        except Exception as exc:
+            logging.error(
+                "update_comment_update_day failed for post_url=%s: %s",
+                update.video_id,
+                exc,
+            )
+            return False
 
-        return len(response.data) > 0
+    def upsert_found_comment(self, comment: CommentStats) -> bool:
+        """Upsert found-comment payload into stats table keyed by post_url."""
+
+        payload = {
+            "post_url": comment.post_url,
+            "username": comment.username,
+            "text": comment.text,
+            "likes": comment.likes,
+            "reply_count": comment.reply_count,
+            "date_of_comment": comment.date_of_comment,
+            "last_comment_update": datetime.now(UTC).date().isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+
+        try:
+            response = (
+                self.client.table(SUPABASE_STATS_TABLE_NAME)
+                .upsert(payload, on_conflict="post_url")
+                .execute()
+            )
+            return len(response.data) > 0
+        except Exception as exc:
+            logging.error("upsert_found_comment failed for post_url=%s: %s", comment.post_url, exc)
+            return False

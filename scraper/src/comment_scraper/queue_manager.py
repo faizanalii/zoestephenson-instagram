@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from asyncio import iscoroutine
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.comment_scraper.utils import (
@@ -11,6 +12,7 @@ from src.comment_scraper.utils import (
     should_process_retry,
 )
 from src.models import AccountCookies, TaskState
+from src.settings import MAX_PAGINATION_RETRIES
 
 
 class RedisQueueManager:
@@ -21,24 +23,31 @@ class RedisQueueManager:
 
         self.redis_client = redis_client_module
 
-    def _call_first(self, method_names: list[str], *args: Any, **kwargs: Any) -> Any:
+    async def _call_first(self, method_names: list[str], *args: Any, **kwargs: Any) -> Any:
         """Calls the first available method name from redis_client with provided args."""
 
         for method_name in method_names:
             method = getattr(self.redis_client, method_name, None)
             if callable(method):
-                return method(*args, **kwargs)
+                result = method(*args, **kwargs)
+                if iscoroutine(result):
+                    return await result
+                return result
         return None
 
-    def get_task_state(self, post_url: str, username: str) -> TaskState:
-        """Loads existing processing task state for a post/username or returns default state."""
+    async def get_task_state(self, post_url: str, username: str) -> TaskState:
+        """
+        Loads existing processing task state for a post/username or returns default state.
+        Args:
+            post_url: The URL of the TikTok post
+            username: The username of the user
+        Returns:
+            TaskState object with persisted state or default values
+        """
 
-        payload = self._call_first(
+        payload = await self._call_first(
             [
                 "get_processing_task",
-                "get_task_state",
-                "get_task",
-                "peek_processing_queue_task",
             ],
             post_url,
             username,
@@ -50,21 +59,40 @@ class RedisQueueManager:
         if isinstance(payload, str):
             payload = json.loads(payload)
 
+        # If the retry is mentioned in the payload
         retry_at_raw = payload.get("retry_at")
+
         retry_at = None
+
         if retry_at_raw:
             try:
                 retry_at = datetime.fromisoformat(retry_at_raw)
             except ValueError:
                 retry_at = None
 
+        last_cursor_at = None
+
+        last_cursor_at_raw = payload.get("last_cursor_at", "")
+
+        if last_cursor_at_raw:
+            try:
+                last_cursor_at = datetime.fromisoformat(last_cursor_at_raw)
+
+            except ValueError:
+                last_cursor_at = None
+
         return TaskState(
             post_url=payload.get("post_url", post_url),
             username=payload.get("username", username),
             account_id=payload.get("account_id"),
+            source_queue=payload.get("source_queue"),
             requeued=bool(payload.get("requeued", False)),
             retry_at=retry_at,
+            proxy=payload.get("proxy"),
             variables=payload.get("variables"),
+            retry_count=int(payload.get("retry_count", 0)),
+            last_cursor_at=last_cursor_at,
+            last_error=payload.get("last_error"),
         )
 
     def ensure_retry_gate(self, task: TaskState) -> bool:
@@ -73,35 +101,24 @@ class RedisQueueManager:
         when retry time is not reached.
         """
 
-        if should_process_retry(task.retry_at):
-            return True
+        return should_process_retry(task.retry_at)
 
-        self._call_first(
-            ["push_processing_task", "enqueue_processing_task", "requeue_processing_task"],
-            self.task_to_payload(task),
-        )
-        return False
-
-    def get_account_cookies(self, task: TaskState) -> AccountCookies:
+    async def get_account_cookies(self, task: TaskState) -> AccountCookies:
         """Fetches cookies for the bound account or allocates a fresh account+cookies pair."""
 
         if task.account_id:
-            cookies = self._call_first(
+            cookies = await self._call_first(
                 [
                     "get_cookies_for_account",
-                    "get_account_cookies",
-                    "fetch_cookies",
                 ],
                 task.account_id,
             )
             if isinstance(cookies, dict) and cookies:
                 return AccountCookies(account_id=task.account_id, cookies=cookies)
 
-        account_payload = self._call_first(
+        account_payload = await self._call_first(
             [
-                "pop_account_with_cookies",
                 "get_next_account_with_cookies",
-                "get_processing_account",
             ]
         )
         if isinstance(account_payload, str):
@@ -110,7 +127,8 @@ class RedisQueueManager:
         if not isinstance(account_payload, dict):
             raise RuntimeError(
                 "No account cookies available from redis_client. "
-                "Expected one of: pop_account_with_cookies/get_next_account_with_cookies/get_processing_account"
+                "Expected one of: pop_account_with_cookies/"
+                "get_next_account_with_cookies/get_processing_account"
             )
 
         account_id = account_payload.get("account_id")
@@ -120,37 +138,61 @@ class RedisQueueManager:
 
         return AccountCookies(account_id=str(account_id), cookies=cookies)
 
-    def requeue_task(self, task: TaskState, variables: dict[str, Any] | None = None) -> None:
+    async def requeue_task(
+        self,
+        task: TaskState,
+        variables: dict[str, Any] | None = None,
+        failure_reason: str = "unknown",
+    ) -> int:
         """
         Requeues a task into processing queue with randomized retry timer
         and latest cursor state.
         """
 
+        next_retry_count = task.retry_count + 1
+
+        if next_retry_count > MAX_PAGINATION_RETRIES:
+            return next_retry_count
+
         delay_seconds = random_retry_delay_seconds()
+
         updated = TaskState(
             post_url=task.post_url,
             username=task.username,
             account_id=task.account_id,
+            source_queue=task.source_queue,
             requeued=True,
+            proxy=task.proxy,
             retry_at=build_retry_at(delay_seconds),
             variables=variables if variables is not None else task.variables,
+            retry_count=next_retry_count,
+            last_cursor_at=datetime.now(UTC),
+            last_error=failure_reason,
         )
         payload = self.task_to_payload(updated)
 
-        result = self._call_first(
+        result = await self._call_first(
             [
-                "push_processing_task",
-                "enqueue_processing_task",
-                "requeue_processing_task",
-                "put_processing_task",
+                "set_processing_task_state",
             ],
             payload,
         )
 
-        if result is None:
+        if result in (None, False):
             raise RuntimeError(
                 "Unable to requeue task: redis_client is missing a supported enqueue method."
             )
+
+        return next_retry_count
+
+    async def clear_task_state(self, task: TaskState) -> None:
+        """Removes persisted retry state for a completed task."""
+
+        await self._call_first(
+            ["delete_processing_task", "delete_task_state", "remove_processing_task"],
+            task.post_url,
+            task.username,
+        )
 
     def task_to_payload(self, task: TaskState) -> dict[str, Any]:
         """Converts TaskState to queue payload format used by processing queue."""

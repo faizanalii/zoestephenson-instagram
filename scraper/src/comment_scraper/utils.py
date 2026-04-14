@@ -11,7 +11,12 @@ from bs4 import BeautifulSoup
 from jsonparse import find_key
 
 from src.models import CommentStats
-from src.settings import PROXY, PROXY_COUNTRIES_LIST
+from src.settings import (
+    PROXY,
+    PROXY_COUNTRIES_LIST,
+    RETRY_DELAY_MAX_SECONDS,
+    RETRY_DELAY_MIN_SECONDS,
+)
 
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
 
@@ -199,7 +204,7 @@ async def get_cached_comment_cursor(scripts: list[BeautifulSoup]) -> str | None:
     for script in scripts:
         try:
             data = json.loads(script.text)
-        except:
+        except Exception:
             continue
         cached_comment_cursor: list[str] = find_key(data, "cached_comments_cursor")
         if not cached_comment_cursor:
@@ -313,10 +318,13 @@ async def extract_edges(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [edge for edge in edges if isinstance(edge, dict)]
 
 
-def random_retry_delay_seconds(min_minutes: int = 3, max_minutes: int = 5) -> int:
-    """Generates a randomized retry delay in seconds within the configured minute range."""
+def random_retry_delay_seconds(
+    min_seconds: int = RETRY_DELAY_MIN_SECONDS,
+    max_seconds: int = RETRY_DELAY_MAX_SECONDS,
+) -> int:
+    """Generates a randomized retry delay in seconds within configured bounds."""
 
-    return random.randint(min_minutes * 60, max_minutes * 60)
+    return random.randint(min_seconds, max_seconds)
 
 
 def build_retry_at(delay_seconds: int) -> datetime:
@@ -325,13 +333,35 @@ def build_retry_at(delay_seconds: int) -> datetime:
     return datetime.now(UTC) + timedelta(seconds=delay_seconds)
 
 
-async def should_process_retry(retry_at: datetime | None, now: datetime | None = None) -> bool:
+def should_process_retry(retry_at: datetime | None, now: datetime | None = None) -> bool:
     """Returns True when retry gate is open and task can be processed now."""
 
     if retry_at is None:
         return True
     current = now or datetime.now(UTC)
     return current >= retry_at
+
+
+def is_cursor_stale(
+    cursor_timestamp: datetime | None,
+    now: datetime | None = None,
+    max_age_seconds: int = 240,
+) -> bool:
+    """
+    Returns True when persisted cursor state is older than max_age_seconds.
+    Args:
+        cursor_timestamp: The datetime when the cursor was last updated.
+        now: The current datetime for comparison. If None, uses current UTC time.
+        max_age_seconds: The maximum age in seconds before a cursor is considered stale.
+    Returns:
+        bool: True if the cursor is stale and should be refreshed, False otherwise.
+    """
+
+    if cursor_timestamp is None:
+        return False
+    current = now or datetime.now(UTC)
+    age_seconds = (current - cursor_timestamp).total_seconds()
+    return age_seconds > max_age_seconds
 
 
 async def normalize_comment_list(comments: Any) -> list[dict[str, Any]]:

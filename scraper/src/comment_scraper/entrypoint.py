@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from src.comment_scraper.orchestrator import run
 
 
-def find_comment(post_url: str, username: str) -> Any:
+async def find_comment(post_url: str, username: str, source_queue: str | None = None) -> Any:
     """
     Entry point that returns matching comment model or None for a post URL and username.
     Args:
@@ -16,4 +15,4 @@ def find_comment(post_url: str, username: str) -> Any:
         A CommentStats object if a matching comment is found, or None if not found or an
     """
 
-    return asyncio.run(run(post_url=post_url, username=username))
+    return await run(post_url=post_url, username=username, source_queue=source_queue)

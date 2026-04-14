@@ -23,6 +23,7 @@ INPUT_SHEET_COMMENT_STATS: str = os.getenv(
 )
 
 OUTPUT_SHEET_COMMENT_STATS: str = ""
+SUPABASE_STATS_TABLE_NAME: str = os.getenv("SUPABASE_STATS_TABLE_NAME", "instagram_stats")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -43,7 +44,14 @@ KEY_VIDEO_QUEUE_120 = "instagram:120"
 KEY_VIDEO_QUEUE_240 = "instagram:240"
 KEY_VIDEO_QUEUE_REST = "instagram:rest"
 PROCESSING_QUEUE: str = "instagram:processing"
+TASK_STATE_PREFIX: str = "instagram:task_state"
 
 PROXY: str = "http://62570d546c329a5d28b4__cr.{COUNTRY}:b59a5a071a414fec@74.81.81.81:823"
 
 PROXY_COUNTRIES_LIST: list[str] = ["de", "be", "fr", "nl", "us", "gb", "ca", "au", "at"]
+
+# Retry behavior for comment scraping requeues.
+RETRY_DELAY_MIN_SECONDS: int = int(os.getenv("RETRY_DELAY_MIN_SECONDS", "120"))
+RETRY_DELAY_MAX_SECONDS: int = int(os.getenv("RETRY_DELAY_MAX_SECONDS", "240"))
+MAX_PAGINATION_RETRIES: int = int(os.getenv("MAX_PAGINATION_RETRIES", "2"))
+CURSOR_MAX_AGE_SECONDS: int = int(os.getenv("CURSOR_MAX_AGE_SECONDS", "240"))
