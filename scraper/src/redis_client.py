@@ -12,10 +12,12 @@ Redis Keys:
 """
 
 import json
+import logging
+from datetime import datetime
 
 import redis
 
-from src.models import Post
+from src.models import AccountCookies, Post
 from src.settings import (
     KEY_COOKIES_AVAILABLE,
     PROCESSING_QUEUE,
@@ -57,7 +59,7 @@ def _safe_json_loads(raw: str) -> dict:
     return {}
 
 
-def _normalize_account_cookie_payload(raw_item: str) -> dict | None:
+def _normalize_account_cookie_payload(raw_item: str) -> AccountCookies | None:
     """
     Normalize cookie payloads from Redis into account_id/cookies shape.
     Args:
@@ -75,16 +77,33 @@ def _normalize_account_cookie_payload(raw_item: str) -> dict | None:
 
     if isinstance(cookies, dict) and cookies:
         if account_id:
-            return {"account_id": str(account_id), "cookies": cookies}
-        return {"account_id": "unknown", "cookies": cookies}
+            return AccountCookies(**{"account_id": str(account_id), "cookies": cookies})
+        return AccountCookies(**{"account_id": "unknown", "cookies": cookies})
 
     # Some producers store only the cookie mapping itself.
     if all(isinstance(k, str) for k in payload.keys()) and all(
         isinstance(v, str) for v in payload.values()
     ):
-        return {"account_id": str(account_id or "unknown"), "cookies": payload}
+        return AccountCookies(**{"account_id": str(account_id or "unknown"), "cookies": payload})
 
     return None
+
+
+def _serialize_payload(payload: dict) -> dict:
+    """
+    Convert datetime objects to ISO strings for JSON serialization.
+    Args:
+        payload: Dict that may contain datetime objects
+    Returns:
+        Dict with all datetime objects converted to ISO strings
+    """
+    serialized = {}
+    for key, value in payload.items():
+        if isinstance(value, datetime):
+            serialized[key] = value.isoformat()
+        else:
+            serialized[key] = value
+    return serialized
 
 
 async def get_processing_task(post_url: str, username: str) -> dict | None:
@@ -129,7 +148,8 @@ async def set_processing_task_state(payload: dict) -> bool:
     client = await get_redis_client()
     key = _task_state_key(post_url, username)
 
-    client.set(key, json.dumps(payload))
+    serializable_payload = _serialize_payload(payload)
+    client.set(key, json.dumps(serializable_payload))
 
     return True
 
@@ -167,23 +187,25 @@ async def get_cookies_for_account(account_id: str) -> dict | None:
         if not payload:
             continue
 
-        if payload.get("account_id") == str(account_id):
-            cookies = payload.get("cookies")
+        if payload.account_id == str(account_id):
+            cookies = payload.cookies
             if isinstance(cookies, dict) and cookies:
                 return cookies
     return None
 
 
-async def get_next_account_with_cookies() -> dict | None:
+async def get_next_account_with_cookies() -> AccountCookies | None:
     """
     Pop the next account cookie payload from the available cookie queue.
     Returns:
-        Dict with account_id and cookies or None if no cookies available
+        AccountCookies object or None if no cookies available
     """
 
     client = await get_redis_client()
 
     raw_item: str | None = client.lpop(KEY_COOKIES_AVAILABLE)  # type: ignore[assignment]
+
+    logging.info(f"Popped raw cookie item from Redis: {raw_item}")
 
     if not raw_item:
         return None

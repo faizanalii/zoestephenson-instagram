@@ -2,21 +2,18 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
 
 from curl_cffi import requests
 from curl_cffi.requests.exceptions import RequestException
-from scraper.src.comment_scraper.post_page import get_post_page
 
 from src.comment_scraper.ig_query_client import run_graphql_query
-from src.comment_scraper.utils import search_comment
-from src.models import AccountCookies, CommentStats, PageRequirements, TaskState
-from src.settings import CURSOR_MAX_AGE_SECONDS, MAX_PAGINATION_RETRIES
-
-from .queue_manager import RedisQueueManager
-from .utils import (
+from src.comment_scraper.post_page import get_post_page
+from src.comment_scraper.queue_manager import RedisQueueManager
+from src.comment_scraper.utils import (
     classify_response,
     extract_dtsg_token,
     extract_edges,
@@ -31,7 +28,10 @@ from .utils import (
     get_scripts_from_profile_page,
     is_cursor_stale,
     parse_page_info,
+    search_comment,
 )
+from src.models import AccountCookies, CommentStats, PageRequirements, TaskState
+from src.settings import CURSOR_MAX_AGE_SECONDS, MAX_PAGINATION_RETRIES
 
 # Reuse existing probe utilities without modifying original files.
 MODULE_DIR = Path(__file__).resolve().parent
@@ -50,10 +50,20 @@ def _load_module(module_name: str) -> Any:
     return importlib.import_module(module_name)
 
 
-async def fetch_page_requirements(post_url: str, proxy: str) -> PageRequirements:
-    """Fetches post page and extracts all fields required for GraphQL pagination requests."""
+async def fetch_page_requirements(
+    post_url: str, proxy: str, cookies: dict[str, str]
+) -> PageRequirements:
+    """
+    Fetches post page and extracts all fields required for GraphQL pagination requests.
+    Args:
+        post_url: The URL of the Instagram post to fetch and extract data from.
+        proxy: The proxy to use for the request.
+        cookies: The cookies to use for the request.
+    Returns:
+        A PageRequirements object containing all necessary fields for pagination.
+    """
 
-    page_html = await get_post_page(post_url=post_url, proxy=proxy)
+    page_html = await get_post_page(post_url=post_url, proxy=proxy, cookies=cookies)
 
     scripts = await get_scripts_from_profile_page(html=page_html)
 
@@ -65,6 +75,12 @@ async def fetch_page_requirements(post_url: str, proxy: str) -> PageRequirements
 
     lsd_token: str | None = await extract_lsd_token(page_html)
     dtsg_token: str | None = await extract_dtsg_token(page_html)
+
+    print(
+        f"Extracted page requirements for {post_url}: csrf_token={csrf_token}, app_id={app_id}, "
+        f"media_id={media_id}, claim_token={claim_token}, cursor={cursor}, lsd_token={lsd_token}, dtsg_token={dtsg_token}"
+    )
+    input("Hold - check extracted page requirements, and press Enter to continue...")
 
     if not csrf_token or not app_id or not media_id or not cursor:
         raise RuntimeError("Missing required page extraction fields for GraphQL pagination.")
@@ -131,8 +147,15 @@ async def paginate_and_search(
     if is_cursor_stale(task.last_cursor_at, max_age_seconds=CURSOR_MAX_AGE_SECONDS):
         cursor = page_requirements.cursor
 
+    logging.info(
+        f"Starting pagination with cursor: {cursor} for {task.username} on {task.post_url}"
+    )
+
     while True:
         try:
+            logging.info(
+                f"Making GraphQL request for {task.username} on {task.post_url} with cursor: {cursor}"
+            )
             response = await run_graphql_query(
                 csrf_token=page_requirements.csrf_token,
                 app_id=page_requirements.app_id,
@@ -148,7 +171,11 @@ async def paginate_and_search(
                 session=session,
                 timeout=120.0,
             )
+            logging.info(
+                f"Received response with status code {response.status_code} for {task.username} on {task.post_url}"
+            )
         except RequestException:
+            logging.error(f"Request exception occurred for {task.username} on {task.post_url}")
             retry_count = await queue_manager.requeue_task(
                 task,
                 variables=cursor,
@@ -162,6 +189,13 @@ async def paginate_and_search(
 
         body = response.text
 
+        with open("debug_response.json", "w", encoding="utf-8") as f:
+            f.write(body)
+
+        input(
+            "Hold - check raw response body in debug_response.json, and press Enter to continue..."
+        )
+
         kind = await classify_response(
             response.status_code,
             response.headers.get("content-type"),
@@ -169,6 +203,7 @@ async def paginate_and_search(
         )
 
         payload = None
+        logging.info(f"Classified response as {kind} for {task.username} on {task.post_url}")
         # TODO: In the requeue put the last cursor, proxy, username, post_url
         if kind == "json":
             try:
@@ -196,13 +231,22 @@ async def paginate_and_search(
             return retry_count
 
         edges = await extract_edges(payload)
-
+        logging.info(
+            f"Extracted {len(edges) if edges else 0} comment edges for {task.username} on {task.post_url}"
+        )
         found_comment = await search_comment(edges, task.username, post_url=task.post_url)
-
+        logging.info(
+            f"Search result for {task.username} on {task.post_url} in current page: "
+            f"{'Found comment' if found_comment else 'No comment found'}"
+        )
         if found_comment is not None:
             return found_comment
 
         next_cursor, has_next_page = await parse_page_info(payload)
+        logging.info(
+            f"Parsed page info for {task.username} on {task.post_url}: "
+            f"next_cursor={next_cursor}, has_next_page={has_next_page}"
+        )
         # TODO: Update the supabase from here and return, or create a different way of
         # exiting from here
         if not has_next_page or next_cursor is None:

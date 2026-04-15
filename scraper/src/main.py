@@ -1,5 +1,5 @@
 """
-TikTok Comment Scraper - Main Entry Point
+Instagram Comment Scraper - Main Entry Point
 ==========================================
 
 Processes videos from Redis queue until empty.
@@ -59,7 +59,7 @@ async def main(queue_key: str) -> None:
         logger.error("Redis is not connected. Check REDIS_HOST, REDIS_PORT, REDIS_PASSWORD.")
         return
 
-    logger.info("Starting TikTok Comment Scraper...")
+    logger.info("Starting Instagram Comment Scraper...")
 
     # Get initial queue length
     queue_length = await get_video_queue_length(queue_key=queue_key)
@@ -76,7 +76,8 @@ async def main(queue_key: str) -> None:
     # Track found comments whose DB upserts are pending a successful Sheets flush.
     pending_found_comments: dict[str, CommentStats] = {}
     db = SupabaseDB()
-
+    # TODO: Re pushing the videos into processing quwue
+    # Resolve the issue
     # Process videos until queue is empty
     while not await is_video_queue_empty(queue_key=queue_key):
         # Pop next video from queue
@@ -99,7 +100,7 @@ async def main(queue_key: str) -> None:
             )
 
             processed_count += 1
-
+            print(result)
             if isinstance(result, CommentStats):
                 found_count += 1
                 logger.info(f"Found comment for {post_job.username} on video {post_job.post_url}")
@@ -180,7 +181,7 @@ async def main(queue_key: str) -> None:
         logger.info(f"Committing {len(pending_found_comments)} pending Supabase updates...")
         for post_url, comment in pending_found_comments.items():
             # TODO: Not an upsert operation when adding to supabase but a simple insert, we can have duplicates here if the same video is processed multiple times before a successful flush. We should consider adding an upsert method to the supabase client to handle this more elegantly.
-            stats_ok = db.upsert_found_comment(comment)
+            stats_ok = db.insert_found_comment(comment)
             status_ok = db.update_comment_update_day(UpdateCommentCheckDay(video_id=post_url))
 
             if not (stats_ok and status_ok):

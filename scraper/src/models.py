@@ -116,7 +116,7 @@ class CommentStats(BaseModel):
     )
     date_of_comment: str = Field(
         ..., description="Date of the comment"
-    )  # Convert the timestamp (1748573540) to a string in the format "YYYY-MM-DD"
+    )  # Convert the timestamp (1748573540) to a string in the format "YYYY-MM-DD" when creating an instance of CommentStats.
     date: str = Field(default=datetime.now().strftime("%Y-%m-%d"))
 
 
@@ -143,6 +143,30 @@ class AccountCookies:
 
     account_id: str
     cookies: dict[str, str]
+
+
+@dataclass(slots=True)
+class HeaderRequirements:
+    """Holds extracted header data from the post page required for pagination and rate limit checks."""
+
+    app_id: str
+    csrf_token: str
+    hmac_claim: str | None
+    lsd_token: str | None
+    dtsg_token: str | None
+    claim_token: str | None
+
+
+@dataclass(slots=True)
+class DataRequirements:
+    """
+    Holds all extracted fields required to call Instagram comments pagination APIs.
+    """
+
+    media_id: str
+    cursor: dict[str, Any]
+    fb_dtsg: str
+    lsd_token: str
 
 
 @dataclass(slots=True)

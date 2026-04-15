@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from src.supabase_client import get_first_comments
 MODULE_DIR = Path(__file__).resolve().parent
 DEBUGGING_DIR = MODULE_DIR.parent
 WORKSPACE_DIR = DEBUGGING_DIR.parent
-
+MAX_PAGINATION_RETRIES: int = 5
 if str(DEBUGGING_DIR) not in sys.path:
     sys.path.insert(0, str(DEBUGGING_DIR))
 if str(WORKSPACE_DIR) not in sys.path:
@@ -52,9 +53,13 @@ async def run(
     """Runs the DB-first then pagination fallback pipeline and returns found comment or None."""
 
     normalized_post_url = normalize_post_url(post_url)
-
-    first_comments: list[dict[str, Any]] | None = _load_get_comment_from_db(post_url=post_url)
-
+    logging.info(f"Starting comment search for {username} on {normalized_post_url}")
+    first_comments: list[dict[str, Any]] | None = _load_get_comment_from_db(
+        post_url=normalized_post_url
+    )
+    logging.info(
+        f"Loaded {len(first_comments) if first_comments else 0} comments from DB for {normalized_post_url}"
+    )
     # Search in the first comments if the comments are available
     if first_comments is not None:
         comment: CommentStats | None = await search_comment(
@@ -64,9 +69,12 @@ async def run(
         if comment:
             return comment
 
+    logging.info(f"No comment found in DB for {username} on {post_url}, proceeding to pagination.")
+
     # TODO: Work on redis client module, it shoudl be direct import not like this
     redis_client_module = _load_redis_client_module()
 
+    logging.info(f"Loaded redis client module: {redis_client_module}")
     queue_manager = RedisQueueManager(redis_client_module)
 
     task = await queue_manager.get_task_state(normalized_post_url, username)
@@ -74,9 +82,23 @@ async def run(
     if source_queue:
         task.source_queue = source_queue
 
+    logging.info(f"Loaded task state for {username} on {normalized_post_url}: {task}")
+
+    if task.retry_count >= MAX_PAGINATION_RETRIES:
+        logging.info(
+            "Retries exhausted (%s/%s) for %s on %s — giving up.",
+            task.retry_count,
+            MAX_PAGINATION_RETRIES,
+            username,
+            normalized_post_url,
+        )
+        await queue_manager.clear_task_state(task)
+        return None
+
     if not queue_manager.ensure_retry_gate(task):
         return max(1, task.retry_count)
 
+    logging.info(f"Passed retry gate for {username} on {normalized_post_url}")
     account = await queue_manager.get_account_cookies(task)
 
     task.account_id = account.account_id
@@ -86,6 +108,8 @@ async def run(
 
     # TODO: If the page requirements already exist in the persisted variables use them
     page_requirements = await fetch_page_requirements(normalized_post_url, proxy=proxy)
+
+    logging.info(f"Fetched page requirements for {normalized_post_url}: {page_requirements}")
 
     return await paginate_and_search(
         task=task,

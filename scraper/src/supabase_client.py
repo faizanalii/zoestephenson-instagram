@@ -441,8 +441,8 @@ class SupabaseDB:
             )
             return False
 
-    def upsert_found_comment(self, comment: CommentStats) -> bool:
-        """Upsert found-comment payload into stats table keyed by post_url."""
+    def insert_found_comment(self, comment: CommentStats) -> bool:
+        """Insert found-comment payload into stats table as a new row."""
 
         payload = {
             "post_url": comment.post_url,
@@ -456,12 +456,8 @@ class SupabaseDB:
         }
 
         try:
-            response = (
-                self.client.table(SUPABASE_STATS_TABLE_NAME)
-                .upsert(payload, on_conflict="post_url")
-                .execute()
-            )
+            response = self.client.table(SUPABASE_STATS_TABLE_NAME).insert(payload).execute()
             return len(response.data) > 0
         except Exception as exc:
-            logging.error("upsert_found_comment failed for post_url=%s: %s", comment.post_url, exc)
+            logging.error("insert_found_comment failed for post_url=%s: %s", comment.post_url, exc)
             return False

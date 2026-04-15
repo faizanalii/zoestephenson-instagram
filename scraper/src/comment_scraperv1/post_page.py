@@ -15,7 +15,6 @@ async def get_post_page(post_url: str, proxy: str, cookies: dict[str, str]) -> s
     Args:
         post_url (str): The URL of the Instagram post.
         proxy (str): The proxy URL to use for the request.
-        cookies (dict[str, str]): The cookies to use for the request.
     Returns:
         str: The HTML content of the profile page.
     """

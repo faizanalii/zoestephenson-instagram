@@ -230,8 +230,6 @@ async def get_comment_and_bifilter_token(
         if not end_cursor:
             continue
 
-        # Skip the first script if it contains end_cursor
-
         cursor_data: dict[str, str] = json.loads(end_cursor[0])
 
         return cursor_data
@@ -510,16 +508,38 @@ async def search_comment(
         The first comment dictionary that contains the target username, or None if not found.
     """
 
+    def _created_at_to_date(created_at: Any) -> str:
+        """Convert Unix timestamp-like values to UTC date string (YYYY-MM-DD)."""
+
+        if created_at is None:
+            return ""
+
+        if isinstance(created_at, (int, float)):
+            return datetime.fromtimestamp(created_at, tz=UTC).date().isoformat()
+
+        if isinstance(created_at, str):
+            value = created_at.strip()
+            if not value:
+                return ""
+            try:
+                return datetime.fromtimestamp(float(value), tz=UTC).date().isoformat()
+            except ValueError:
+                # Already a date/ISO string or unknown format; keep original text.
+                return value
+
+        return str(created_at)
+
     for comment in comments:
         node: dict[str, Any] = comment.get("node", {})
         if node.get("user", {}).get("username", "").lower() == username.lower():
+            created_at_value = node.get("created_at", "")
             return CommentStats(
                 post_url=post_url,
-                username=comment.get("user", {}).get("username", ""),
-                text=comment.get("text", ""),
-                likes=comment.get("comment_like_count", 0),
-                reply_count=comment.get("child_comment_count", 0),
-                date_of_comment=comment.get("created_at", ""),
+                username=node.get("user", {}).get("username", ""),
+                text=node.get("text", ""),
+                likes=node.get("comment_like_count", 0),
+                reply_count=node.get("child_comment_count", 0),
+                date_of_comment=_created_at_to_date(created_at_value),
             )
     return None
 
