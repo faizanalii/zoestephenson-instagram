@@ -5,9 +5,10 @@ from typing import Any
 
 from curl_cffi import requests
 from curl_cffi.requests.models import Response
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 
-def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str, str]:
+async def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str, str]:
     """
     Builds the headers for the GraphQL query request.
     Args:
@@ -15,7 +16,7 @@ def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str, str]:
         app_id: The Instagram app ID extracted from the post page.
         post_id: The post ID extracted from the post page.
     Returns:
-        A dictionary of headers to include in the GraphQL query request.
+        A dictionary of headers for the GraphQL query request.
     """
     return {
         "accept": "*/*",
@@ -28,11 +29,7 @@ def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str, str]:
         "referer": f"https://www.instagram.com/p/{post_id}/",
         "sec-ch-prefers-color-scheme": "dark",
         "sec-ch-ua": '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
-        "sec-ch-ua-full-version-list": (
-            '"Google Chrome";v="137.0.7151.56", '
-            '"Chromium";v="137.0.7151.56", '
-            '"Not/A)Brand";v="24.0.0.0"'
-        ),
+        "sec-ch-ua-full-version-list": '"Google Chrome";v="137.0.7151.56", "Chromium";v="137.0.7151.56", "Not/A)Brand";v="24.0.0.0"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-model": '""',
         "sec-ch-ua-platform": '"Windows"',
@@ -40,11 +37,7 @@ def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str, str]:
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/137.0.0.0 Safari/537.36"
-        ),
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
         "x-asbd-id": "359341",
         "x-csrftoken": csrf_token,
         "x-fb-friendly-name": "PolarisPostCommentsPaginationQuery",
@@ -54,7 +47,7 @@ def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str, str]:
     }
 
 
-def build_headers_dynamic(
+async def build_headers_dynamic(
     csrf_token: str,
     app_id: str,
     post_id: str,
@@ -63,7 +56,21 @@ def build_headers_dynamic(
     include_requested_with: bool = False,
     extra_headers: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    headers = build_headers(csrf_token=csrf_token, app_id=app_id, post_id=post_id)
+    """
+    Build the headers dynamically
+    Args:
+        csrf_token: str
+        app_id: str
+        post_id: str
+        lsd_token: str
+        hmac_claim: str
+        include_requested_with: bool
+        extra_headers: dict[str, str]
+    Returns:
+        dict[str, str]: The headers to be used in the request
+    """
+    headers = await build_headers(csrf_token=csrf_token, app_id=app_id, post_id=post_id)
+
     if lsd_token:
         headers["x-fb-lsd"] = lsd_token
     if hmac_claim:
@@ -72,10 +79,19 @@ def build_headers_dynamic(
         headers["x-requested-with"] = "XMLHttpRequest"
     if extra_headers:
         headers.update(extra_headers)
+
     return headers
 
 
-def build_query_data(media_id: str, cursor: dict[str, Any]) -> dict[str, str]:
+async def build_query_data(media_id: str, cursor: dict[str, Any]) -> dict[str, str]:
+    """
+    Build the data payload for the GraphQL query request.
+    Args:
+        media_id: The media ID extracted from the post page.
+        cursor: The comment cursor extracted from the post page.
+    Returns:
+        A dictionary of data payload for the GraphQL query request.
+    """
     variables = {
         "after": json.dumps(cursor),
         "before": None,
@@ -85,8 +101,6 @@ def build_query_data(media_id: str, cursor: dict[str, Any]) -> dict[str, str]:
         "sort_order": "popular",
         "__relay_internal__pv__PolarisIsLoggedInrelayprovider": True,
     }
-    # TODO: Alot is missing in the query data, like bifilter token
-    # Console those and check
     return {
         "__crn": "comet.igweb.PolarisDesktopPostRoute",
         "fb_api_caller_class": "RelayModern",
@@ -97,7 +111,7 @@ def build_query_data(media_id: str, cursor: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def build_query_data_dynamic(
+async def build_query_data_dynamic(
     media_id: str,
     cursor: dict[str, Any],
     fb_dtsg: str | None = None,
@@ -105,17 +119,17 @@ def build_query_data_dynamic(
     extra_data: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """
-    Builds the form data for the GraphQL query request.
+    Build the data payload for the GraphQL query request dynamically
     Args:
-        media_id: The media ID of the post.
-        cursor: The cursor for pagination.
-        fb_dtsg: The fb_dtsg token.
-        lsd_token: The LSD token.
-        extra_data: Any additional form data to include.
+        media_id: The media ID extracted from the post page.
+        cursor: The comment cursor extracted from the post page.
+        fb_dtsg: The fb_dtsg token extracted from the post page.
+        lsd_token: The LSD token extracted from the post page.
+        extra_data: Any extra data to be included in the payload
     Returns:
-        A dictionary of form data for the GraphQL query request.
+        A dictionary of data payload for the GraphQL query request.
     """
-    data = build_query_data(media_id=media_id, cursor=cursor)
+    data = await build_query_data(media_id=media_id, cursor=cursor)
     if fb_dtsg:
         data["fb_dtsg"] = fb_dtsg
     if lsd_token:
@@ -125,14 +139,15 @@ def build_query_data_dynamic(
     return data
 
 
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def run_graphql_query(
     csrf_token: str,
     app_id: str,
     media_id: str,
     post_id: str,
-    proxy: str,
     comment_cursor_bifilter_token: dict[str, Any],
     cookies: dict[str, str] | None = None,
+    proxy: str | None = None,
     lsd_token: str | None = None,
     hmac_claim: str | None = None,
     fb_dtsg: str | None = None,
@@ -143,32 +158,28 @@ async def run_graphql_query(
     timeout: float | None = None,
 ) -> Response:
     """
-    Runs a GraphQL query to fetch Instagram comments.
+    Run the GraphQL query to fetch comments.
     Args:
         csrf_token: The CSRF token extracted from the post page.
         app_id: The Instagram app ID extracted from the post page.
-        media_id: The media ID of the post extracted from the post page.
+        media_id: The media ID extracted from the post page.
         post_id: The post ID extracted from the post page.
-        comment_cursor_bifilter_token: The bifilter token for
-        pagination extracted from the post page
-        cookies: Optional cookies to include in the request.
-        proxy: Optional proxy to route the request through.
-        lsd_token: Optional LSD token extracted from the post page.
-        hmac_claim: Optional HMAC claim extracted from the post page.
-        fb_dtsg: Optional fb_dtsg token extracted from the post page.
-        include_requested_with: Whether to include the X-Requested-With header in the request.
-        extra_headers: Any additional headers to include in the request.
-        extra_data: Any additional form data to include in the request body.
-        session: An optional requests.Session object to use for making the request. If not provided,
-        a new session will be created for each call.
-        timeout: An optional timeout value (in seconds) for the request. If not provided,
-        no timeout will be set.
+        comment_cursor_bifilter_token: The comment cursor bifilter
+        token extracted from the post page.
+        cookies: The cookies to be used in the request.
+        proxy: The proxy to be used in the request.
+        lsd_token: The LSD token extracted from the post page.
+        hmac_claim: The HMAC claim extracted from the post page.
+        fb_dtsg: The fb_dtsg token extracted from the post page.
+        include_requested_with: Whether to include the X-Requested-With header.
+        extra_headers: Any extra headers to be included in the request.
+        extra_data: Any extra data to be included in the payload.
+        session: The requests session to be used for the request.
+        timeout: The timeout for the request.
     Returns:
-        The Response object returned by the requests library after making the POST request
-        to the Instagram GraphQL endpoint.
+        The response from the GraphQL query request.
     """
-
-    headers = build_headers_dynamic(
+    headers = await build_headers_dynamic(
         csrf_token=csrf_token,
         app_id=app_id,
         post_id=post_id,
@@ -177,7 +188,7 @@ async def run_graphql_query(
         include_requested_with=include_requested_with,
         extra_headers=extra_headers,
     )
-    data = build_query_data_dynamic(
+    data = await build_query_data_dynamic(
         media_id=media_id,
         cursor=comment_cursor_bifilter_token,
         fb_dtsg=fb_dtsg,
@@ -185,21 +196,21 @@ async def run_graphql_query(
         extra_data=extra_data,
     )
 
-    print(f"Headers for GraphQL query: {headers}")
-
-    print(f"Data for GraphQL query: {data}")
-
-    input("Hold - check printed headers and data, and press Enter to continue...")
-
-    # TODO: Consistent failure from API
-
     call = session.post if session else requests.post
-    return call(
+    response = call(
         "https://www.instagram.com/graphql/query",
         cookies=cookies,
         headers=headers,
         data=data,
-        impersonate="chrome142",
+        impersonate="chrome146",
         proxy=proxy if proxy is not None else None,
         timeout=timeout,
     )
+
+    if response.status_code != 200:
+        raise Exception(
+            f"GraphQL query failed with status code {response.status_code}"
+            f" and response: {response.text}"
+        )
+
+    return response

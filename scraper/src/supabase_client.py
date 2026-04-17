@@ -321,7 +321,7 @@ def bulk_upsert_posts(posts: list[Post]) -> int:
     return processed
 
 
-def push_error_post(post_url: str, error_message: str) -> None:
+async def push_error_post(post_url: str, error_message: str) -> None:
     """
     Insert a new post or update an existing one.
 
@@ -393,15 +393,15 @@ class SupabaseDB:
                         "updated_at": datetime.now(UTC).isoformat(),
                     }
                 )
-                .eq("post_url", update.video_id)
+                .eq("post_url", update.post_url)
                 .execute()
             )
             updated = len(response.data) > 0
             if not updated:
-                logging.warning("comment_not_found updated 0 rows for post_url=%s", update.video_id)
+                logging.warning("comment_not_found updated 0 rows for post_url=%s", update.post_url)
             return updated
         except Exception as exc:
-            logging.error("comment_not_found failed for post_url=%s: %s", update.video_id, exc)
+            logging.error("comment_not_found failed for post_url=%s: %s", update.post_url, exc)
             return False
 
     def update_comment_update_day(self, update: UpdateCommentCheckDay) -> bool:
@@ -418,32 +418,35 @@ class SupabaseDB:
                 self.client.table(TABLE_NAME)
                 .update(
                     {
-                        "last_comment_update": update.last_comment_update,
                         "comment_exists": True,
                         "updated_at": datetime.now(UTC).isoformat(),
                     }
                 )
-                .eq("post_url", update.video_id)
+                .eq("post_url", update.post_url)
                 .execute()
             )
             updated = len(response.data) > 0
             if not updated:
                 logging.warning(
-                    "update_comment_update_day updated 0 rows for post_url=%s",
-                    update.video_id,
+                    "updated_at updated 0 rows for post_url=%s",
+                    update.post_url,
                 )
             return updated
         except Exception as exc:
             logging.error(
-                "update_comment_update_day failed for post_url=%s: %s",
-                update.video_id,
+                "updated_at failed for post_url=%s: %s",
+                update.post_url,
                 exc,
             )
             return False
 
     def insert_found_comment(self, comment: CommentStats) -> bool:
-        """Insert found-comment payload into stats table as a new row."""
+        """Insert a daily comment snapshot.
 
+        The table has a unique constraint on (post_url, username, created_at),
+        so upsert with ignore_duplicates=True is idempotent: re-processing the same
+        post on the same day is a silent no-op; a new day always gets a new row.
+        """
         payload = {
             "post_url": comment.post_url,
             "username": comment.username,
@@ -451,13 +454,14 @@ class SupabaseDB:
             "likes": comment.likes,
             "reply_count": comment.reply_count,
             "date_of_comment": comment.date_of_comment,
-            "last_comment_update": datetime.now(UTC).date().isoformat(),
-            "updated_at": datetime.now(UTC).isoformat(),
         }
-
         try:
-            response = self.client.table(SUPABASE_STATS_TABLE_NAME).insert(payload).execute()
-            return len(response.data) > 0
+            self.client.table(SUPABASE_STATS_TABLE_NAME).upsert(
+                payload,
+                on_conflict="post_url,username,created_at",
+                ignore_duplicates=True,
+            ).execute()
+            return True
         except Exception as exc:
             logging.error("insert_found_comment failed for post_url=%s: %s", comment.post_url, exc)
             return False

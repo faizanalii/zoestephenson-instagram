@@ -55,3 +55,14 @@ RETRY_DELAY_MIN_SECONDS: int = int(os.getenv("RETRY_DELAY_MIN_SECONDS", "120"))
 RETRY_DELAY_MAX_SECONDS: int = int(os.getenv("RETRY_DELAY_MAX_SECONDS", "240"))
 MAX_PAGINATION_RETRIES: int = int(os.getenv("MAX_PAGINATION_RETRIES", "2"))
 CURSOR_MAX_AGE_SECONDS: int = int(os.getenv("CURSOR_MAX_AGE_SECONDS", "240"))
+
+# Maximum number of times a single post can be re-queued before it is sent to
+# the dead-letter (error) table and dropped from active queues.
+MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "5"))
+
+# Hard cap on pagination pages per find_comment call. Prevents runaway loops on
+# posts with huge comment counts or corrupt cursors.
+MAX_PAGINATION_DEPTH: int = int(os.getenv("MAX_PAGINATION_DEPTH", "300"))
+
+# Maximum consecutive rate-limit (429) hits before giving up and re-queuing.
+MAX_RATE_LIMIT_RETRIES: int = int(os.getenv("MAX_RATE_LIMIT_RETRIES", "3"))

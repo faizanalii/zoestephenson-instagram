@@ -1,7 +1,7 @@
 """
-Comment scraper package for finding comments by username on Instagram posts.
+Comment scraper module.
 """
 
-from .entrypoint import find_comment
+from .entry_point import find_comment
 
 __all__ = ["find_comment"]

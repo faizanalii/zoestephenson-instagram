@@ -474,21 +474,16 @@ async def remove_url_from_processing_queue(post_url: str) -> bool:
     """
     Remove a post job from the processing queue by post_url.
 
+    Items are stored as raw URL strings (pushed by add_url_to_processing_queue).
+
     Args:
-        post_url: The URL of the TikTok post to remove
+        post_url: The URL of the post to remove
     Returns:
         True if a job was removed, False otherwise
     """
     client = await get_redis_client()
-    for item in client.lrange(PROCESSING_QUEUE, 0, -1):  # type: ignore[assignment]
-        try:
-            job = json.loads(item)
-            if job.get("post_url") == post_url:
-                client.lrem(PROCESSING_QUEUE, 1, item)  # type: ignore[assignment]
-                return True
-        except json.JSONDecodeError:
-            continue
-    return False
+    removed: int = client.lrem(PROCESSING_QUEUE, 1, post_url)  # type: ignore[assignment]
+    return removed > 0
 
 
 async def get_all_post_urls_in_processing_queue() -> set[str]:

@@ -16,8 +16,15 @@ import logging
 import random
 
 from src.comment_scraper import find_comment
-from src.google_sheets.output_sheets import flush_buffer, push_comment_data
-from src.models import CommentNotFound, CommentStats, Post, UpdateCommentCheckDay
+from src.google_sheets.output_sheets import flush_buffer
+from src.models import (
+    CommentNotFound,
+    CommentStats,
+    Post,
+    ScrapeResult,
+    ScrapeStatus,
+    UpdateCommentCheckDay,
+)
 from src.redis_client import (
     add_url_to_processing_queue,
     delete_processing_task,
@@ -76,8 +83,6 @@ async def main(queue_key: str) -> None:
     # Track found comments whose DB upserts are pending a successful Sheets flush.
     pending_found_comments: dict[str, CommentStats] = {}
     db = SupabaseDB()
-    # TODO: Re pushing the videos into processing quwue
-    # Resolve the issue
     # Process videos until queue is empty
     while not await is_video_queue_empty(queue_key=queue_key):
         # Pop next video from queue
@@ -89,64 +94,88 @@ async def main(queue_key: str) -> None:
         # Add to processing queue as soon as we start handling this job.
         await add_url_to_processing_queue(post_job)
 
-        should_requeue_post = False
         should_clear_task_state = False
 
         try:
-            result = await find_comment(
-                post_url=post_job.post_url,
-                username=post_job.username,
+            scrape_result: ScrapeResult = await find_comment(
+                post=post_job,
                 source_queue=queue_key,
             )
 
             processed_count += 1
-            print(result)
-            if isinstance(result, CommentStats):
-                found_count += 1
-                logger.info(f"Found comment for {post_job.username} on video {post_job.post_url}")
-                logger.info(f"  Likes: {result.likes}, Replies: {result.reply_count}")
-
-                # Push comment to Google Sheets buffer
-                sheets_ok = await push_comment_data(result)
-
-                if sheets_ok:
-                    # Keep only one pending result per post_url to stay idempotent.
-                    pending_found_comments[post_job.post_url] = result
-                    should_clear_task_state = True
-
-                # TODO: Also Push to the Supabase
-                else:
-                    logger.error(
-                        f"  Sheets push failed for video {post_job.post_url}. "
-                        "Supabase NOT updated — video will be re-queued."
-                    )
-                    should_requeue_post = True
-
-            elif isinstance(result, int):
-                logger.warning(
-                    "Retry requested for post=%s username=%s retry_count=%s",
-                    post_job.post_url,
-                    post_job.username,
-                    result,
-                )
-                should_requeue_post = True
-
-            else:
+            # If the comment is not found then update the DB
+            if scrape_result.status == ScrapeStatus.NOT_FOUND:
                 logger.info(
-                    f"- Comment not found for {post_job.username} on video {post_job.post_url}"
+                    "Comment not found for %s on video %s",
+                    post_job.username,
+                    post_job.post_url,
                 )
-
                 not_found_ok = db.comment_not_found(
-                    CommentNotFound(video_id=post_job.post_url, comment_exists=False)
+                    CommentNotFound(post_url=post_job.post_url, comment_exists=False)
                 )
                 if not not_found_ok:
                     logger.warning(
-                        "Comment-not-found update failed for %s; scheduling retry.",
+                        "Comment-not-found DB update failed for %s; re-queuing.",
                         post_job.post_url,
                     )
-                    should_requeue_post = True
+                    await push_post_to_queue(post_job, queue_key=queue_key)
+                    error_count += 1
                 else:
+                    await remove_url_from_processing_queue(post_job.post_url)
+                    await delete_processing_task(post_job.post_url, post_job.username)
+
+            elif scrape_result.status == ScrapeStatus.FOUND:
+                comment: CommentStats | None = scrape_result.comment
+
+                if not comment:
+                    logger.error(
+                        "ScrapeResult status is FOUND but comment is None for %s",
+                        post_job.post_url,
+                    )
+                    await remove_url_from_processing_queue(post_job.post_url)
+                    continue
+
+                found_count += 1
+                logger.info(f"Found comment for {post_job.username} on video {post_job.post_url}")
+                logger.info(f"  Likes: {comment.likes}, Replies: {comment.reply_count}")
+
+                # Push comment to Google Sheets buffer
+                # sheets_ok = await push_comment_data(comment_stats=comment)
+                sheets_ok = True
+
+                if sheets_ok:
+                    # Keep only one pending result per post_url to stay idempotent.
+                    pending_found_comments[post_job.post_url] = comment
                     should_clear_task_state = True
+                    await remove_url_from_processing_queue(post_job.post_url)
+
+                else:
+                    logger.error(
+                        "Sheets push failed for video %s. Supabase NOT updated — re-queuing.",
+                        post_job.post_url,
+                    )
+                    await push_post_to_queue(post_job, queue_key=queue_key)
+                    error_count += 1
+
+            elif scrape_result.status == ScrapeStatus.RETRY:
+                # entry_point.py already re-queued the post with an incremented
+                # retry_count. We just track it here.
+                logger.warning(
+                    "Retry scheduled for post=%s username=%s retry_count=%s/%s",
+                    post_job.post_url,
+                    post_job.username,
+                    scrape_result.retry_count,
+                    post_job.retry_count,
+                )
+                error_count += 1
+
+            elif scrape_result.status == ScrapeStatus.ERROR:
+                logger.error(
+                    "Post dead-lettered: post=%s reason=%s",
+                    post_job.post_url,
+                    scrape_result.error,
+                )
+                error_count += 1
 
             # Add a small delay between requests
             await asyncio.sleep(random.uniform(0.5, 1.5))
@@ -158,19 +187,7 @@ async def main(queue_key: str) -> None:
                 post_job.username,
                 queue_key,
             )
-            should_requeue_post = True
             error_count += 1
-        finally:
-            if should_requeue_post:
-                await push_post_to_queue(post_job, queue_key=queue_key)
-
-            removed = await remove_url_from_processing_queue(post_job.post_url)
-
-            if not removed:
-                logger.warning(
-                    "Post not present in processing queue during cleanup: %s",
-                    post_job.post_url,
-                )
 
             if should_clear_task_state:
                 await delete_processing_task(post_job.post_url, post_job.username)
@@ -180,21 +197,31 @@ async def main(queue_key: str) -> None:
     if flush_ok and pending_found_comments:
         logger.info(f"Committing {len(pending_found_comments)} pending Supabase updates...")
         for post_url, comment in pending_found_comments.items():
-            # TODO: Not an upsert operation when adding to supabase but a simple insert, we can have duplicates here if the same video is processed multiple times before a successful flush. We should consider adding an upsert method to the supabase client to handle this more elegantly.
-            stats_ok = db.insert_found_comment(comment)
-            status_ok = db.update_comment_update_day(UpdateCommentCheckDay(video_id=post_url))
-
-            if not (stats_ok and status_ok):
-                logger.error(
-                    "Supabase commit failed for post=%s. Re-queueing for retry.",
+            # Retry the DB write in-place rather than re-scraping the whole post.
+            # The comment is already in memory; only the DB call needs to succeed.
+            db_ok = False
+            for attempt in range(1, 4):  # up to 3 attempts
+                stats_ok = db.insert_found_comment(comment)
+                status_ok = db.update_comment_update_day(UpdateCommentCheckDay(post_url=post_url))
+                if stats_ok and status_ok:
+                    db_ok = True
+                    break
+                logger.warning(
+                    "Supabase commit attempt %s/3 failed for post=%s. Retrying...",
+                    attempt,
                     post_url,
                 )
+                await asyncio.sleep(2**attempt)  # 2s, 4s, 8s
 
+            if not db_ok:
+                logger.error(
+                    "Supabase commit exhausted retries for post=%s. Re-queueing for next cycle.",
+                    post_url,
+                )
                 await push_post_to_queue(
                     Post(post_url=post_url, username=comment.username),
                     queue_key=queue_key,
                 )
-
                 error_count += 1
 
         pending_found_comments.clear()

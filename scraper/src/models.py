@@ -5,8 +5,8 @@ cookies, and any other relevant entities used in the application.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -71,6 +71,12 @@ class Post(BaseModel):
 
     post_exists: bool = Field(default=True, description="Indicates if the post exists on Instagram")
 
+    retry_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of times this post has been re-queued for retry",
+    )
+
     @field_validator("post_url")
     @classmethod
     def validate_instagram_url(cls, v: str) -> str:
@@ -120,8 +126,20 @@ class CommentStats(BaseModel):
     date: str = Field(default=datetime.now().strftime("%Y-%m-%d"))
 
 
-@dataclass(slots=True)
-class TaskState:
+class ScrapeStatus(str, Enum):
+    """
+    Enum representing the possible statuses of a scraping task.
+    """
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    FOUND = "found"
+    NOT_FOUND = "not_found"
+    RETRY = "retry"
+    ERROR = "error"
+
+
+class TaskState(BaseModel):
     """Represents the processing state for a single post/username search task."""
 
     post_url: str
@@ -137,28 +155,25 @@ class TaskState:
     last_error: str | None = None
 
 
-@dataclass(slots=True)
-class AccountCookies:
+class AccountCookies(BaseModel):
     """Binds an account identifier to the cookie jar used for GraphQL calls."""
 
     account_id: str
     cookies: dict[str, str]
 
 
-@dataclass(slots=True)
-class HeaderRequirements:
+class HeaderRequirements(BaseModel):
     """Holds extracted header data from the post page required for pagination and rate limit checks."""
 
     app_id: str
     csrf_token: str
-    hmac_claim: str | None
-    lsd_token: str | None
-    dtsg_token: str | None
-    claim_token: str | None
+    hmac_claim: str | None = None
+    lsd_token: str | None = None
+    dtsg_token: str | None = None
+    claim_token: str | None = None
 
 
-@dataclass(slots=True)
-class DataRequirements:
+class DataRequirements(BaseModel):
     """
     Holds all extracted fields required to call Instagram comments pagination APIs.
     """
@@ -169,8 +184,7 @@ class DataRequirements:
     lsd_token: str
 
 
-@dataclass(slots=True)
-class PageRequirements:
+class PageRequirements(BaseModel):
     """Holds all extracted fields required to call Instagram comments pagination APIs."""
 
     post_id: str
@@ -178,22 +192,35 @@ class PageRequirements:
     app_id: str
     media_id: str
     cursor: dict[str, Any]
-    lsd_token: str | None
-    dtsg_token: str | None
-    claim_token: str | None
+    lsd_token: str | None = None
+    dtsg_token: str | None = None
+    claim_token: str | None = None
 
 
-@dataclass
-class CommentNotFound:
+class CommentNotFound(BaseModel):
     """Model for marking no comments found."""
 
-    video_id: str
+    post_url: str
     comment_exists: bool = False
 
 
-@dataclass
-class UpdateCommentCheckDay:
+class UpdateCommentCheckDay(BaseModel):
     """Model for updating last comment check day."""
 
-    video_id: str
-    last_comment_update: str = field(default_factory=lambda: datetime.now(UTC).date().isoformat())
+    post_url: str
+    last_comment_update: str = Field(default_factory=lambda: datetime.now(UTC).date().isoformat())
+
+
+class ScrapeResult(BaseModel):
+    """Standardized result returned from scraper functions like `find_comment()`.
+
+    Use `status` to determine how the caller should react (requeue, persist, etc.).
+    """
+
+    status: ScrapeStatus
+    post_url: str | None = None
+    username: str | None = None
+    comment: CommentStats | None = None
+    retry_count: int = 0
+    retry_after_seconds: int | None = None
+    error: str | None = None

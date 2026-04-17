@@ -15,7 +15,6 @@ async def get_post_page(post_url: str, proxy: str, cookies: dict[str, str]) -> s
     Args:
         post_url (str): The URL of the Instagram post.
         proxy (str): The proxy URL to use for the request.
-        cookies (dict[str, str]): The cookies to use for the request.
     Returns:
         str: The HTML content of the profile page.
     """
@@ -29,6 +28,11 @@ async def get_post_page(post_url: str, proxy: str, cookies: dict[str, str]) -> s
     response_obj = await client.get(
         post_url, version=Version.HTTP_2, allow_redirects=True, cookies=cookies
     )
+
+    if response_obj.status_code.as_int() != 200:
+        raise Exception(
+            f"Failed to fetch post page for {post_url}. Status code: {response_obj.status_code}"
+        )
 
     response: str = await response_obj.text()
 
