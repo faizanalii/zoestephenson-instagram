@@ -1,0 +1,33 @@
+threading.py:1014:SB
+--------------------------------------------------------------------
+Last Page: [WARNING! Browser Not Open!]
+ Duration: 5.63s
+  Browser: Chrome 147.0.7727.57
+   Driver: chromedriver 147.0.7727.57
+Timestamp: 1776421724  (Unix Timestamp)
+     Date: Friday, 17 April 2026
+     Time: 12:28:44 PM  (CEST, UTC+02:00)
+--------------------------------------------------------------------
+Traceback:
+  File "/Users/a/Desktop/Work/In Review/zoestephenson-instagram/account_manager/main.py", line 114, in <module>
+    main()
+    ~~~~^^
+  File "/Users/a/Desktop/Work/In Review/zoestephenson-instagram/account_manager/main.py", line 100, in main
+    with ThreadPoolExecutor(
+         ~~~~~~~~~~~~~~~~~~^
+        max_workers=len(accounts),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        thread_name_prefix="ig-worker",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ) as executor:
+    ^
+  File "/Users/a/.local/share/uv/python/cpython-3.13.9-macos-aarch64-none/lib/python3.13/concurrent/futures/_base.py", line 647, in __exit__
+    self.shutdown(wait=True)
+    ~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/a/.local/share/uv/python/cpython-3.13.9-macos-aarch64-none/lib/python3.13/concurrent/futures/thread.py", line 239, in shutdown
+    t.join()
+    ~~~~~~^^
+  File "/Users/a/.local/share/uv/python/cpython-3.13.9-macos-aarch64-none/lib/python3.13/threading.py", line 1094, in join
+    self._handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+Exception: 
