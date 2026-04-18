@@ -43,7 +43,7 @@ class InstagramDriver:
         """Launch the undetected-Chrome browser with the account's proxy."""
         self._sb_context = SB(
             uc=True,
-            headless=False,
+            headless=True,
             # proxy=self.account.proxy,
             chromium_arg="--disable-notifications,--disable-popup-blocking",
         )

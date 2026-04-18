@@ -2,7 +2,7 @@
 Test Comment
 """
 
-from src.comment_scraperv1 import find_comment
+from src.comment_scraper import find_comment
 from src.models import Post
 
 

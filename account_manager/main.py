@@ -35,7 +35,15 @@ logger = logging.getLogger(__name__)
 
 
 def run_account_worker(account: Account) -> None:
-    """Long-running worker for a single account.  Runs in its own thread."""
+    """
+    Long-running worker for a single account.  Runs in its own thread.
+    This function will keep the account's session alive and push fresh cookies to Redis
+    whenever the pool isn't full.
+    Args:
+        - account: Account dataclass instance containing email, password, and proxy.
+    Returns:
+        - None. This function runs indefinitely until interrupted or an unrecoverable error occurs
+    """
     driver = InstagramDriver(account)
     try:
         driver.start()
@@ -50,7 +58,8 @@ def run_account_worker(account: Account) -> None:
 
             # 2. Extract cookies from the live browser
             cookies = driver.get_cookies_dict()
-            if not cookies:
+            # Basic sanity check to ensure we got valid cookies (e.g. presence of 'datr' cookie)
+            if not cookies or "datr" not in cookies:
                 logger.warning(
                     "No cookies extracted for %s — session may be dead.", account.email
                 )

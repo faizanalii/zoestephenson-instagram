@@ -1,10 +1,12 @@
 """
 Script to clear all items from a specified Redis queue.
 """
+
+import os
 import sys
+
 import redis
 from dotenv import load_dotenv
-import os
 
 load_dotenv()
 
@@ -20,10 +22,11 @@ def clear_queue(queue_key: str):
         port=REDIS_PORT,
         password=REDIS_PASSWORD,
         db=REDIS_DB,
-        decode_responses=True
+        decode_responses=True,
     )
     r.delete(queue_key)
     print(f"Cleared all items from queue: {queue_key}")
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

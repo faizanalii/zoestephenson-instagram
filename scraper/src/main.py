@@ -141,7 +141,7 @@ async def main(queue_key: str) -> None:
 
                 # Push comment to Google Sheets buffer
                 # sheets_ok = await push_comment_data(comment_stats=comment)
-                sheets_ok = True
+                sheets_ok = True  # --- IGNORE ---
 
                 if sheets_ok:
                     # Keep only one pending result per post_url to stay idempotent.

@@ -175,7 +175,8 @@ async def main() -> None:
     if queue_list_rest:
         await push_posts_to_queue(queue_list_rest, KEY_VIDEO_QUEUE_REST)
 
-    # Upsert the videos to Supabase to ensure we have the latest data stored, including any new media_id or hmac_claim
+    # Upsert the videos to Supabase to ensure we have the latest data stored, including
+    # any new media_id or hmac_claim
     # This will also update the updated_at timestamp so we know when it was last processed
     if existing_posts:
         logging.info(f"Upserting {len(existing_posts)} existing posts to Supabase..")

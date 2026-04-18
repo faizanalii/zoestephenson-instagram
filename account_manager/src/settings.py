@@ -48,7 +48,7 @@ PROXY_COUNTRIES: list[str] = os.getenv(
 MAX_COOKIES_POOL_SIZE: int = int(os.getenv("MAX_COOKIES_POOL_SIZE", "100"))
 
 # How often (seconds) each worker refreshes cookies and pushes to Redis.
-COOKIE_REFRESH_INTERVAL: int = int(os.getenv("COOKIE_REFRESH_INTERVAL", "300"))
+COOKIE_REFRESH_INTERVAL: int = int(os.getenv("COOKIE_REFRESH_INTERVAL", "10"))
 
 # How long (seconds) to idle-browse between cookie refreshes to keep the session warm.
 HUMAN_SIM_DURATION: int = int(os.getenv("HUMAN_SIM_DURATION", "120"))
