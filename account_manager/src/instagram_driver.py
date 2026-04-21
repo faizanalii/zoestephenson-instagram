@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import random
 import time
+from typing import Any
 
 from seleniumbase import SB
 
@@ -117,6 +118,46 @@ class InstagramDriver:
             logger.exception("Login failed for %s", self.account.email)
             return False
 
+    def restore_session(self, cookies: list[dict[str, Any]]) -> bool:
+        """Try to restore an authenticated session from a stored cookie jar."""
+        if not cookies:
+            return False
+
+        try:
+            self.sb.open("https://www.instagram.com/")
+            _random_sleep(2, 4)
+            self._dismiss_cookie_banner()
+            self.sb.delete_all_cookies()
+
+            added = 0
+            for cookie in cookies:
+                normalized = _normalize_cookie(cookie)
+                if not normalized:
+                    continue
+                try:
+                    self.sb.driver.add_cookie(normalized)
+                    added += 1
+                except Exception:
+                    logger.debug(
+                        "Could not restore cookie %s for %s",
+                        normalized.get("name"),
+                        self.account.email,
+                    )
+
+            if not added:
+                return False
+
+            self.sb.refresh()
+            _random_sleep(3, 5)
+            self._dismiss_popups()
+            self._logged_in = self.is_logged_in()
+            if self._logged_in:
+                logger.info("Restored Instagram session for %s", self.account.email)
+            return self._logged_in
+        except Exception:
+            logger.exception("Failed to restore session for %s", self.account.email)
+            return False
+
     # ------------------------------------------------------------------
     # Human-like browsing
     # ------------------------------------------------------------------
@@ -187,10 +228,56 @@ class InstagramDriver:
 
     def get_cookies_dict(self) -> dict[str, str]:
         """Return all browser cookies as a flat {name: value} dict."""
-        raw_cookies: list[dict] = self.sb.get_cookies()
+        raw_cookies = self.get_cookies()
         return {
             c["name"]: c["value"] for c in raw_cookies if "name" in c and "value" in c
         }
+
+    def get_cookies(self) -> list[dict[str, Any]]:
+        """Return the raw Selenium cookie jar."""
+        raw_cookies = self.sb.get_cookies()
+        return [cookie for cookie in raw_cookies if isinstance(cookie, dict)]
+
+    def is_logged_in(self) -> bool:
+        """Best-effort check that the current browser session is authenticated."""
+        try:
+            self.sb.open("https://www.instagram.com/")
+            _random_sleep(2, 4)
+            current_url = self.sb.get_current_url().lower()
+        except Exception:
+            logger.exception(
+                "Unable to validate login state for %s", self.account.email
+            )
+            return False
+
+        if any(
+            marker in current_url for marker in ("challenge", "checkpoint", "suspended")
+        ):
+            logger.error(
+                "Account %s hit an Instagram checkpoint: %s",
+                self.account.email,
+                current_url,
+            )
+            return False
+
+        return "login" not in current_url
+
+    def get_login_failure_reason(self) -> str:
+        """Return a human-readable reason when session auth fails."""
+        try:
+            current_url = self.sb.get_current_url().lower()
+        except Exception:
+            return "Browser session failed before Instagram login could be validated"
+
+        if "challenge" in current_url:
+            return "Instagram challenge required"
+        if "checkpoint" in current_url:
+            return "Instagram checkpoint required"
+        if "suspended" in current_url:
+            return "Instagram account appears suspended"
+        if "login" in current_url:
+            return "Instagram login failed or session expired"
+        return f"Instagram session invalid at URL: {current_url}"
 
     # ------------------------------------------------------------------
     # Helpers
@@ -231,3 +318,16 @@ class InstagramDriver:
 
 def _random_sleep(lo: float, hi: float) -> None:
     time.sleep(random.uniform(lo, hi))
+
+
+def _normalize_cookie(cookie: dict[str, Any]) -> dict[str, Any] | None:
+    name = cookie.get("name")
+    value = cookie.get("value")
+    if not name or value is None:
+        return None
+
+    normalized: dict[str, Any] = {"name": name, "value": value}
+    for key in ("domain", "path", "expiry", "secure", "httpOnly", "sameSite"):
+        if key in cookie and cookie[key] is not None:
+            normalized[key] = cookie[key]
+    return normalized

@@ -3,6 +3,7 @@ Account Manager Settings
 """
 
 import os
+import socket
 
 from dotenv import load_dotenv
 
@@ -25,7 +26,22 @@ KEY_COOKIES_AVAILABLE = "cookies:available"
 # ACCOUNTS
 # =============================================================================
 
-ACCOUNTS_FILE: str = os.getenv("ACCOUNTS_FILE", "accounts.txt")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+ACCOUNTS_TABLE_NAME: str = os.getenv("ACCOUNTS_TABLE_NAME", "instagram_accounts")
+WORKER_ID: str = os.getenv("WORKER_ID", socket.gethostname())
+ACCOUNT_POLL_INTERVAL_SECONDS: int = int(
+    os.getenv("ACCOUNT_POLL_INTERVAL_SECONDS", "10")
+)
+ACCOUNT_LEASE_TIMEOUT_SECONDS: int = int(
+    os.getenv("ACCOUNT_LEASE_TIMEOUT_SECONDS", "180")
+)
+ACCOUNT_HEARTBEAT_INTERVAL_SECONDS: int = int(
+    os.getenv("ACCOUNT_HEARTBEAT_INTERVAL_SECONDS", "30")
+)
+COOKIE_STORAGE_DIR: str = os.getenv(
+    "COOKIE_STORAGE_DIR", "downloaded_files/account_cookies"
+)
 
 # =============================================================================
 # PROXY
@@ -48,7 +64,12 @@ PROXY_COUNTRIES: list[str] = os.getenv(
 MAX_COOKIES_POOL_SIZE: int = int(os.getenv("MAX_COOKIES_POOL_SIZE", "100"))
 
 # How often (seconds) each worker refreshes cookies and pushes to Redis.
-COOKIE_REFRESH_INTERVAL: int = int(os.getenv("COOKIE_REFRESH_INTERVAL", "10"))
+COOKIE_REFRESH_INTERVAL: int = int(os.getenv("COOKIE_REFRESH_INTERVAL", "5"))
+
+# How long a leased worker should idle when enough cookies are already available.
+COOKIE_POOL_IDLE_SLEEP_SECONDS: int = int(
+    os.getenv("COOKIE_POOL_IDLE_SLEEP_SECONDS", "20")
+)
 
 # How long (seconds) to idle-browse between cookie refreshes to keep the session warm.
 HUMAN_SIM_DURATION: int = int(os.getenv("HUMAN_SIM_DURATION", "120"))

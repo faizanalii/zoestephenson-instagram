@@ -1,0 +1,24 @@
+version: "3.8"
+
+services:
+  account-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      WORKER_ID: ${WORKER_ID:-account-manager}
+      ACCOUNTS_TABLE_NAME: ${ACCOUNTS_TABLE_NAME:-instagram_accounts}
+      ACCOUNT_POLL_INTERVAL_SECONDS: ${ACCOUNT_POLL_INTERVAL_SECONDS:-10}
+      ACCOUNT_LEASE_TIMEOUT_SECONDS: ${ACCOUNT_LEASE_TIMEOUT_SECONDS:-180}
+      ACCOUNT_HEARTBEAT_INTERVAL_SECONDS: ${ACCOUNT_HEARTBEAT_INTERVAL_SECONDS:-30}
+      COOKIE_POOL_IDLE_SLEEP_SECONDS: ${COOKIE_POOL_IDLE_SLEEP_SECONDS:-20}
+      COOKIE_STORAGE_DIR: /app/downloaded_files/account_cookies
+    volumes:
+      - ./latest_logs:/app/latest_logs
+      - account-manager-cookies:/app/downloaded_files/account_cookies
+
+volumes:
+  account-manager-cookies:

@@ -1,24 +1,26 @@
-"""
-Account Manager — keeps Instagram sessions alive and feeds cookies to Redis.
-
-For each account in accounts.txt:
-  1. Launch a headless undetected-Chrome browser through a unique proxy.
-  2. Log in to Instagram.
-  3. Loop forever:
-     a. Simulate human browsing (scroll, explore, open posts).
-     b. Extract cookies from the live session.
-     c. If the Redis cookie pool has < MAX_COOKIES_POOL_SIZE entries, push cookies.
-     d. Wait COOKIE_REFRESH_INTERVAL seconds, then repeat.
-"""
+"""Account Manager — one leased Instagram account per container."""
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.account_loader import Account, load_accounts
+from src.account_loader import Account
+from src.cookie_store import load_account_cookies, save_account_cookies
 from src.instagram_driver import InstagramDriver
 from src.redis_client import get_available_cookies_count, is_pool_full, push_cookies
-from src.settings import COOKIE_REFRESH_INTERVAL, MAX_COOKIES_POOL_SIZE
+from src.settings import (
+    ACCOUNT_HEARTBEAT_INTERVAL_SECONDS,
+    ACCOUNT_POLL_INTERVAL_SECONDS,
+    COOKIE_POOL_IDLE_SLEEP_SECONDS,
+    COOKIE_REFRESH_INTERVAL,
+    MAX_COOKIES_POOL_SIZE,
+    WORKER_ID,
+)
+from src.supabase_client import (
+    claim_next_account,
+    heartbeat_account_lease,
+    mark_account_skipped,
+    release_account,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,61 +32,79 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# TODO: Work on Keep pushing the cookies to the redis
-# Currently it's just staying where it is
+
+class AccountLoginError(RuntimeError):
+    """Raised when an account session cannot be restored or logged in."""
+
+
+def _authenticate_driver(driver: InstagramDriver, account: Account) -> None:
+    driver.start()
+
+    persisted_cookies = load_account_cookies(account)
+    if persisted_cookies and driver.restore_session(persisted_cookies):
+        return
+
+    if persisted_cookies:
+        logger.warning(
+            "Saved cookies did not restore a valid session for %s. Falling back to login.",
+            account.email,
+        )
+
+    if not driver.login():
+        raise AccountLoginError(driver.get_login_failure_reason())
+
+    cookies = driver.get_cookies()
+    if cookies:
+        save_account_cookies(account, cookies)
+
+
+def _refresh_account_session(driver: InstagramDriver, account: Account) -> None:
+    driver.stop()
+    _authenticate_driver(driver, account)
 
 
 def run_account_worker(account: Account) -> None:
-    """
-    Long-running worker for a single account.  Runs in its own thread.
-    This function will keep the account's session alive and push fresh cookies to Redis
-    whenever the pool isn't full.
-    Args:
-        - account: Account dataclass instance containing email, password, and proxy.
-    Returns:
-        - None. This function runs indefinitely until interrupted or an unrecoverable error occurs
-    """
+    """Run a single leased account until interrupted or it becomes invalid."""
     driver = InstagramDriver(account)
-    try:
-        driver.start()
+    last_heartbeat = 0.0
 
-        if not driver.login():
-            logger.error("Skipping account %s — login failed.", account.email)
-            return
+    try:
+        _authenticate_driver(driver, account)
 
         while True:
-            # 1. Simulate human browsing to keep the session warm
-            driver.simulate_human_behaviour()
-
-            # 2. Extract cookies from the live browser
-            cookies = driver.get_cookies_dict()
-            # Basic sanity check to ensure we got valid cookies (e.g. presence of 'datr' cookie)
-            if not cookies or "datr" not in cookies:
-                logger.warning(
-                    "No cookies extracted for %s — session may be dead.", account.email
-                )
-                # Try re-login once
-                driver.stop()
-                driver.start()
-                if not driver.login():
-                    logger.error(
-                        "Re-login failed for %s. Exiting worker.", account.email
+            now = time.monotonic()
+            if now - last_heartbeat >= ACCOUNT_HEARTBEAT_INTERVAL_SECONDS:
+                if not heartbeat_account_lease(account.account_id, WORKER_ID):
+                    raise RuntimeError(
+                        f"Lost Supabase lease ownership for account {account.email}"
                     )
-                    return
-                continue
+                last_heartbeat = now
 
-            # 3. Push to Redis if the pool isn't full
             if is_pool_full():
                 pool_size = get_available_cookies_count()
                 logger.info(
-                    "Cookie pool full (%s >= %s). Waiting for pool to drain...",
+                    "Cookie pool full (%s >= %s). Keeping %s idle for %ss.",
                     pool_size,
                     MAX_COOKIES_POOL_SIZE,
+                    account.email,
+                    COOKIE_POOL_IDLE_SLEEP_SECONDS,
                 )
-            else:
-                push_cookies(account_id=account.email, cookies=cookies)
+                time.sleep(COOKIE_POOL_IDLE_SLEEP_SECONDS)
+                continue
 
-            # 4. Wait before next refresh cycle
+            driver.simulate_human_behaviour()
+
+            cookies = driver.get_cookies_dict()
+            if not cookies or "datr" not in cookies or not driver.is_logged_in():
+                logger.warning(
+                    "Session invalid for %s. Re-authenticating.", account.email
+                )
+                _refresh_account_session(driver, account)
+                continue
+
+            push_cookies(account_id=account.email, cookies=cookies)
+            save_account_cookies(account, driver.get_cookies())
+
             logger.info(
                 "Account %s: sleeping %ss before next cookie refresh.",
                 account.email,
@@ -92,34 +112,72 @@ def run_account_worker(account: Account) -> None:
             )
             time.sleep(COOKIE_REFRESH_INTERVAL)
 
-    except KeyboardInterrupt:
-        logger.info("Worker for %s interrupted.", account.email)
-    except Exception:
-        logger.exception("Fatal error in worker for %s", account.email)
     finally:
         driver.stop()
 
 
-def main() -> None:
-    accounts = load_accounts()
-    if not accounts:
-        logger.error("No accounts loaded. Add accounts to accounts.txt and retry.")
+def _wait_for_cookie_demand() -> None:
+    if not is_pool_full():
         return
 
-    logger.info("Starting account manager with %s account(s).", len(accounts))
+    pool_size = get_available_cookies_count()
+    logger.info(
+        "Cookie pool full (%s >= %s). Sleeping %ss before checking again.",
+        pool_size,
+        MAX_COOKIES_POOL_SIZE,
+        COOKIE_POOL_IDLE_SLEEP_SECONDS,
+    )
+    time.sleep(COOKIE_POOL_IDLE_SLEEP_SECONDS)
 
-    # One thread per account — each thread owns its own browser instance.
-    with ThreadPoolExecutor(
-        max_workers=len(accounts),
-        thread_name_prefix="ig-worker",
-    ) as executor:
-        futures = {executor.submit(run_account_worker, acct): acct for acct in accounts}
-        for future in as_completed(futures):
-            acct = futures[future]
-            try:
-                future.result()
-            except Exception:
-                logger.exception("Worker for %s exited with error.", acct.email)
+
+def main() -> None:
+    logger.info("Starting account manager worker_id=%s", WORKER_ID)
+
+    while True:
+        leased_account: Account | None = None
+        should_skip_account = False
+        release_error: str | None = None
+
+        try:
+            _wait_for_cookie_demand()
+            if is_pool_full():
+                continue
+
+            leased_account = claim_next_account(WORKER_ID)
+            if leased_account is None:
+                logger.info(
+                    "No eligible Instagram accounts available. Retrying in %ss.",
+                    ACCOUNT_POLL_INTERVAL_SECONDS,
+                )
+                time.sleep(ACCOUNT_POLL_INTERVAL_SECONDS)
+                continue
+
+            logger.info("Leased account %s to this container", leased_account.email)
+            run_account_worker(leased_account)
+
+        except KeyboardInterrupt:
+            logger.info("Account manager interrupted. Releasing lease and exiting.")
+            break
+        except AccountLoginError as exc:
+            should_skip_account = True
+            release_error = str(exc)
+            logger.error("Account login failure: %s", exc)
+        except Exception as exc:
+            release_error = str(exc)
+            logger.exception("Fatal runtime error in account manager")
+            time.sleep(ACCOUNT_POLL_INTERVAL_SECONDS)
+        finally:
+            if leased_account is None:
+                continue
+
+            if should_skip_account:
+                mark_account_skipped(
+                    leased_account.account_id,
+                    WORKER_ID,
+                    release_error or "Unknown Instagram account failure",
+                )
+            else:
+                release_account(leased_account.account_id, WORKER_ID, release_error)
 
 
 if __name__ == "__main__":
