@@ -15,7 +15,7 @@ import json
 
 import redis
 
-from src.models import Post
+from src.models import AccountCookies, Post
 from src.settings import (
     KEY_COOKIES_AVAILABLE,
     PROCESSING_QUEUE,
@@ -24,6 +24,44 @@ from src.settings import (
     REDIS_PASSWORD,
     REDIS_PORT,
 )
+
+
+def _safe_json_loads(raw: str) -> dict:
+    """Parse Redis JSON payloads defensively."""
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    return {}
+
+
+def _normalize_account_cookie_payload(raw_item: str) -> AccountCookies | None:
+    """Normalize cookie payloads into account_id/cookies shape."""
+    payload = _safe_json_loads(raw_item)
+    if not payload:
+        return None
+
+    account_id = payload.get("account_id")
+    cookies = payload.get("cookies")
+
+    if isinstance(cookies, dict) and cookies:
+        return AccountCookies(
+            account_id=str(account_id or "unknown"),
+            cookies={str(key): str(value) for key, value in cookies.items()},
+        )
+
+    if all(isinstance(key, str) for key in payload.keys()) and all(
+        isinstance(value, str) for value in payload.values()
+    ):
+        return AccountCookies(
+            account_id=str(account_id or "unknown"),
+            cookies={str(key): str(value) for key, value in payload.items()},
+        )
+
+    return None
+
 
 # =============================================================================
 # CONNECTION
@@ -139,6 +177,28 @@ async def get_cookies() -> dict | None:
     if token_json:
         return json.loads(token_json)
     return None
+
+
+async def get_available_account_cookies(limit: int = 3) -> list[AccountCookies]:
+    """Read available cookie payloads without consuming the Redis pool."""
+    client = await get_redis_client()
+    cookie_payloads: list[AccountCookies] = []
+    seen_accounts: set[str] = set()
+
+    for raw_item in client.lrange(KEY_COOKIES_AVAILABLE, 0, -1):  # type: ignore[assignment]
+        payload = _normalize_account_cookie_payload(raw_item)
+        if payload is None or not payload.cookies:
+            continue
+        if payload.account_id in seen_accounts:
+            continue
+
+        cookie_payloads.append(payload)
+        seen_accounts.add(payload.account_id)
+
+        if len(cookie_payloads) >= limit:
+            break
+
+    return cookie_payloads
 
 
 # =============================================================================

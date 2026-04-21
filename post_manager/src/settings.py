@@ -34,6 +34,7 @@ SHEETS_CREDENTIALS_FILE: str = "zoecredentials.json"
 
 # Account Cookies
 KEY_COOKIES_AVAILABLE = "cookies:available"
+POST_PAGE_COOKIE_RETRY_ATTEMPTS: int = int(os.getenv("POST_PAGE_COOKIE_RETRY_ATTEMPTS", "3"))
 
 # Redis key names
 KEY_VIDEO_QUEUE_40 = "instagram:40"

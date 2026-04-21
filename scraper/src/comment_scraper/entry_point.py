@@ -41,6 +41,11 @@ from .utils import (
 )
 
 
+def _is_reel_url(post_url: str) -> bool:
+    normalized = post_url.lower()
+    return "/reel/" in normalized or "/reels/" in normalized
+
+
 def _should_dead_letter(post: Post) -> bool:
     """Return True when the post has exhausted its retry budget."""
     return post.retry_count >= MAX_RETRIES
@@ -194,6 +199,24 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
         json_scripts=json_scripts, lsd_token=header_data.lsd_token, fb_dtsg=header_data.dtsg_token
     )
 
+    is_reel_post = _is_reel_url(post.post_url)
+
+    logging.info("Post %s identified as %s", post.post_url, "reel" if is_reel_post else "non-reel")
+
+    # The cursor shouldn't be a string for the initial reel comments query, but the pagination query, so we use its type to determine the initial query mode
+    query_mode = (
+        "initial_reel_comments"
+        if is_reel_post and isinstance(payload_data.cursor, str)
+        else "pagination"
+    )
+
+    logging.info(
+        "Starting comment pagination for post=%s account=%s query_mode=%s",
+        post.post_url,
+        account.account_id,
+        query_mode,
+    )
+
     # Extract all necessary fields for pagination from the page scripts and HTML
     rate_limit_hits = 0
     consecutive_empty_pages = 0
@@ -206,6 +229,8 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
                 media_id=payload_data.media_id,
                 post_id=post_id if post_id else payload_data.media_id,
                 comment_cursor_bifilter_token=payload_data.cursor,
+                query_mode=query_mode,
+                is_reel_post=is_reel_post,
                 cookies=account.cookies,
                 session=session,
                 proxy=proxy_url,
@@ -314,6 +339,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
                 # Update the payload cursor for the next pagination request
                 if next_cursor:
                     payload_data.cursor = next_cursor
+                    query_mode = "pagination"
 
                     await asyncio.sleep(
                         random.uniform(1, 3)

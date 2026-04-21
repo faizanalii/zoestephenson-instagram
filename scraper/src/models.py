@@ -179,7 +179,7 @@ class DataRequirements(BaseModel):
     """
 
     media_id: str
-    cursor: dict[str, Any]
+    cursor: dict[str, Any] | str | None = None
     fb_dtsg: str
     lsd_token: str
 
@@ -191,7 +191,7 @@ class PageRequirements(BaseModel):
     csrf_token: str
     app_id: str
     media_id: str
-    cursor: dict[str, Any]
+    cursor: dict[str, Any] | str
     lsd_token: str | None = None
     dtsg_token: str | None = None
     claim_token: str | None = None

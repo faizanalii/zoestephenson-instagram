@@ -7,8 +7,20 @@ from curl_cffi import requests
 from curl_cffi.requests.models import Response
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+PAGINATION_DOC_ID = "26224338453892885"
+INITIAL_REEL_COMMENTS_DOC_ID = "26649248411374914"
 
-async def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str, str]:
+PAGINATION_FRIENDLY_NAME = "PolarisPostCommentsPaginationQuery"
+INITIAL_REEL_FRIENDLY_NAME = "PolarisPostCommentsContainerQuery"
+
+
+async def build_headers(
+    csrf_token: str,
+    app_id: str,
+    post_id: str,
+    friendly_name: str = PAGINATION_FRIENDLY_NAME,
+    is_reel_post: bool = False,
+) -> dict[str, str]:
     """
     Builds the headers for the GraphQL query request.
     Args:
@@ -18,6 +30,8 @@ async def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str,
     Returns:
         A dictionary of headers for the GraphQL query request.
     """
+    referer_path = "reels" if is_reel_post else "p"
+
     return {
         "accept": "*/*",
         "accept-language": "en-US,en;q=0.9,ur;q=0.8",
@@ -26,7 +40,7 @@ async def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str,
         "origin": "https://www.instagram.com",
         "pragma": "no-cache",
         "priority": "u=1, i",
-        "referer": f"https://www.instagram.com/p/{post_id}/",
+        "referer": f"https://www.instagram.com/{referer_path}/{post_id}/",
         "sec-ch-prefers-color-scheme": "dark",
         "sec-ch-ua": '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
         "sec-ch-ua-full-version-list": '"Google Chrome";v="137.0.7151.56", "Chromium";v="137.0.7151.56", "Not/A)Brand";v="24.0.0.0"',
@@ -40,7 +54,7 @@ async def build_headers(csrf_token: str, app_id: str, post_id: str) -> dict[str,
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
         "x-asbd-id": "359341",
         "x-csrftoken": csrf_token,
-        "x-fb-friendly-name": "PolarisPostCommentsPaginationQuery",
+        "x-fb-friendly-name": friendly_name,
         "x-fb-lsd": "9TXxZWXSdt5xjxL4UOPc92",
         "x-ig-app-id": app_id,
         "x-root-field-name": "xdt_api__v1__media__media_id__comments__connection",
@@ -51,6 +65,8 @@ async def build_headers_dynamic(
     csrf_token: str,
     app_id: str,
     post_id: str,
+    friendly_name: str = PAGINATION_FRIENDLY_NAME,
+    is_reel_post: bool = False,
     lsd_token: str | None = None,
     hmac_claim: str | None = None,
     include_requested_with: bool = False,
@@ -69,7 +85,13 @@ async def build_headers_dynamic(
     Returns:
         dict[str, str]: The headers to be used in the request
     """
-    headers = await build_headers(csrf_token=csrf_token, app_id=app_id, post_id=post_id)
+    headers = await build_headers(
+        csrf_token=csrf_token,
+        app_id=app_id,
+        post_id=post_id,
+        friendly_name=friendly_name,
+        is_reel_post=is_reel_post,
+    )
 
     if lsd_token:
         headers["x-fb-lsd"] = lsd_token
@@ -83,7 +105,11 @@ async def build_headers_dynamic(
     return headers
 
 
-async def build_query_data(media_id: str, cursor: dict[str, Any]) -> dict[str, str]:
+async def build_query_data(
+    media_id: str,
+    cursor: dict[str, Any] | str | None,
+    query_mode: str = "pagination",
+) -> dict[str, str]:
     """
     Build the data payload for the GraphQL query request.
     Args:
@@ -92,8 +118,27 @@ async def build_query_data(media_id: str, cursor: dict[str, Any]) -> dict[str, s
     Returns:
         A dictionary of data payload for the GraphQL query request.
     """
+    if query_mode == "initial_reel_comments":
+        variables = {
+            "media_id": media_id,
+            "__relay_internal__pv__PolarisIsLoggedInrelayprovider": True,
+        }
+        return {
+            "__crn": "comet.igweb.PolarisClipsTabDesktopProfiledContentRoute",
+            "fb_api_caller_class": "RelayModern",
+            "fb_api_req_friendly_name": INITIAL_REEL_FRIENDLY_NAME,
+            "variables": json.dumps(variables),
+            "server_timestamps": "true",
+            "doc_id": INITIAL_REEL_COMMENTS_DOC_ID,
+        }
+
+    if isinstance(cursor, str):
+        after_cursor = cursor
+    else:
+        after_cursor = json.dumps(cursor or {})
+
     variables = {
-        "after": json.dumps(cursor),
+        "after": after_cursor,
         "before": None,
         "first": 10,
         "last": None,
@@ -104,16 +149,17 @@ async def build_query_data(media_id: str, cursor: dict[str, Any]) -> dict[str, s
     return {
         "__crn": "comet.igweb.PolarisDesktopPostRoute",
         "fb_api_caller_class": "RelayModern",
-        "fb_api_req_friendly_name": "PolarisPostCommentsPaginationQuery",
+        "fb_api_req_friendly_name": PAGINATION_FRIENDLY_NAME,
         "variables": json.dumps(variables),
         "server_timestamps": "true",
-        "doc_id": "26224338453892885",
+        "doc_id": PAGINATION_DOC_ID,
     }
 
 
 async def build_query_data_dynamic(
     media_id: str,
-    cursor: dict[str, Any],
+    cursor: dict[str, Any] | str | None,
+    query_mode: str = "pagination",
     fb_dtsg: str | None = None,
     lsd_token: str | None = None,
     extra_data: dict[str, str] | None = None,
@@ -129,7 +175,7 @@ async def build_query_data_dynamic(
     Returns:
         A dictionary of data payload for the GraphQL query request.
     """
-    data = await build_query_data(media_id=media_id, cursor=cursor)
+    data = await build_query_data(media_id=media_id, cursor=cursor, query_mode=query_mode)
     if fb_dtsg:
         data["fb_dtsg"] = fb_dtsg
     if lsd_token:
@@ -145,7 +191,9 @@ async def run_graphql_query(
     app_id: str,
     media_id: str,
     post_id: str,
-    comment_cursor_bifilter_token: dict[str, Any],
+    comment_cursor_bifilter_token: dict[str, Any] | str | None,
+    query_mode: str = "pagination",
+    is_reel_post: bool = False,
     cookies: dict[str, str] | None = None,
     proxy: str | None = None,
     lsd_token: str | None = None,
@@ -183,6 +231,12 @@ async def run_graphql_query(
         csrf_token=csrf_token,
         app_id=app_id,
         post_id=post_id,
+        friendly_name=(
+            INITIAL_REEL_FRIENDLY_NAME
+            if query_mode == "initial_reel_comments"
+            else PAGINATION_FRIENDLY_NAME
+        ),
+        is_reel_post=is_reel_post,
         lsd_token=lsd_token,
         hmac_claim=hmac_claim,
         include_requested_with=include_requested_with,
@@ -191,6 +245,7 @@ async def run_graphql_query(
     data = await build_query_data_dynamic(
         media_id=media_id,
         cursor=comment_cursor_bifilter_token,
+        query_mode=query_mode,
         fb_dtsg=fb_dtsg,
         lsd_token=lsd_token,
         extra_data=extra_data,

@@ -25,6 +25,9 @@ async def get_post_page(post_url: str, proxy: str, cookies: dict[str, str]) -> s
         proxies=[Proxy.all(url=proxy)] if proxy else None,
     )
 
+    # Remove the query parameters from the post URL to avoid issues with fetching the page
+    post_url = post_url.split("?")[0]
+
     response_obj = await client.get(
         post_url, version=Version.HTTP_2, allow_redirects=True, cookies=cookies
     )

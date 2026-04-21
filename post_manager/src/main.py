@@ -40,6 +40,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# TODO: No need to use account cookies for the reels as the first_comments never show up
+# However, for the posts they should be used as the page does return the comments on first page
+
 
 async def main() -> None:
     """

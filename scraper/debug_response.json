@@ -1,0 +1,37 @@
+{
+    "errors": [
+        {
+            "message": "A server error field_exception occured. Check server logs for details.",
+            "severity": "CRITICAL",
+            "mids": [
+                "789fe8baba6498d05930b3597398812e"
+            ],
+            "debug_link": "https://www.meta.com/debug/?mid=789fe8baba6498d05930b3597398812e",
+            "code": 1675030,
+            "api_error_code": -1,
+            "summary": "Query Error",
+            "description": "Error performing query.",
+            "description_html": null,
+            "description_raw": "Error performing query.",
+            "is_silent": false,
+            "is_transient": false,
+            "is_not_critical": false,
+            "requires_reauth": false,
+            "allow_user_retry": false,
+            "debug_info": null,
+            "query_path": null,
+            "fbtrace_id": "D0g4D9GXZAm",
+            "www_request_id": "AJLlguGZKZ2m-nvomPjz5cy",
+            "path": [
+                "xdt_api__v1__media__media_id__comments__connection"
+            ]
+        }
+    ],
+    "extensions": {
+        "server_metadata": {
+            "request_start_time_ms": 1776788772196,
+            "time_at_flush_ms": 1776788772241
+        },
+        "is_final": true
+    }
+}

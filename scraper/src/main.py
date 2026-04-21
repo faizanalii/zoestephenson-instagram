@@ -16,7 +16,7 @@ import logging
 import random
 
 from src.comment_scraper import find_comment
-from src.google_sheets.output_sheets import flush_buffer
+from src.google_sheets.output_sheets import flush_buffer, push_comment_data
 from src.models import (
     CommentNotFound,
     CommentStats,
@@ -125,6 +125,12 @@ async def main(queue_key: str) -> None:
                     await delete_processing_task(post_job.post_url, post_job.username)
 
             elif scrape_result.status == ScrapeStatus.FOUND:
+                logging.info(
+                    "Comment found for %s on video %s. Preparing to push to Google Sheets and update Supabase.",
+                    post_job.username,
+                    post_job.post_url,
+                )
+                logging.info(f"ScrapeResult comment stats: {scrape_result.comment}")
                 comment: CommentStats | None = scrape_result.comment
 
                 if not comment:
@@ -140,7 +146,7 @@ async def main(queue_key: str) -> None:
                 logger.info(f"  Likes: {comment.likes}, Replies: {comment.reply_count}")
 
                 # Push comment to Google Sheets buffer
-                # sheets_ok = await push_comment_data(comment_stats=comment)
+                sheets_ok = await push_comment_data(comment_stats=comment)
                 sheets_ok = True  # --- IGNORE ---
 
                 if sheets_ok:
@@ -188,6 +194,11 @@ async def main(queue_key: str) -> None:
                 queue_key,
             )
             error_count += 1
+            # TODO: Think on it, as it becomes an infinite retry loop, maybe we should add a retry count and a dead-letter queue for posts that keep failing after N attempts?
+            # Remove task from the processing queue so it can be retried in the next cycle.
+            await remove_url_from_processing_queue(post_job.post_url)
+            # Add it again to the main queue for retry in the next cycle.
+            await push_post_to_queue(post_job, queue_key=queue_key)
 
             if should_clear_task_state:
                 await delete_processing_task(post_job.post_url, post_job.username)

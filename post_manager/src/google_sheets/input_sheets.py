@@ -40,8 +40,14 @@ def get_comment_data() -> list[dict]:
     Returns:
         list[dict]: A list of dictionaries containing comment data.
     """
-    return [{"username": "dessyamalia01", "post_url": "https://www.instagram.com/p/DWte0fylh5b"}]
-    # TODO: Remove the above hardcoded return statement and uncomment the code below to fetch data from Google Sheets once testing is complete.
+    # TODO: remove it after testing
+    return [
+        {
+            "username": "arladairyuk",
+            "post_url": "https://www.instagram.com/reel/DVWwywnEpfV/?igsh=MXFnem05eGEzMXZhcg==",
+        },
+        {"username": "hozeluistorente", "post_url": "https://www.instagram.com/p/DXPY6gUjs85/"},
+    ]
     try:
         sheet = _get_sheet(INPUT_SHEET_COMMENT_STATS)
         data = sheet.get_all_records()

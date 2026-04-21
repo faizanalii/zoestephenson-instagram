@@ -131,7 +131,7 @@ async def classify_response(
 
 async def parse_page_info(
     json_body: dict[str, Any],
-) -> tuple[dict[str, Any] | None, bool | None]:
+) -> tuple[dict[str, Any] | str | None, bool | None]:
     """
     Args:
         json_body: The JSON payload from the GraphQL response.
@@ -154,7 +154,8 @@ async def parse_page_info(
     try:
         return json.loads(cursor_raw), has_next_page
     except Exception:  # noqa: BLE001
-        return None, has_next_page
+        # Some responses return an opaque cursor string rather than JSON.
+        return cursor_raw, has_next_page
 
 
 async def extract_rate_limit_error(json_body: dict[str, Any]) -> dict[str, Any] | None:
@@ -305,7 +306,7 @@ class PostPageParser:
     @staticmethod
     async def get_comment_and_bifilter_token(
         json_scripts: list[dict[str, Any]],
-    ) -> dict[str, str] | None:
+    ) -> dict[str, str] | str | None:
         """
         Get the comment and bifilter token from the scripts.
         Args:
@@ -323,12 +324,16 @@ class PostPageParser:
 
             import pprint
 
-            pprint.pprint(end_cursor)
+            logging.info("end_cursor content: %s", pprint.pformat(end_cursor[0]))
 
-            # Skip the first script if it contains end_cursor
-            cursor_data: dict[str, str] = json.loads(end_cursor[0])
-
-            return cursor_data
+            cursor_raw: str = end_cursor[0]
+            try:
+                cursor_data = json.loads(cursor_raw)
+                return cursor_data
+            except Exception:  # noqa: BLE001
+                # Instagram can emit end_cursor as an opaque string token.
+                return cursor_raw
+        logging.warning("No end_cursor found in any script")
         return None
 
     @staticmethod
@@ -488,9 +493,13 @@ class PostPageParser:
         """
 
         media_id: str | None = await self.get_media_id(json_scripts)
-        cursor: dict[str, Any] | None = await self.get_comment_and_bifilter_token(json_scripts)
+        cursor: dict[str, Any] | str | None = await self.get_comment_and_bifilter_token(
+            json_scripts
+        )
 
-        if not media_id or not cursor or not fb_dtsg:
+        # Some reel pages do not expose bifilter cursor in the initial HTML payload.
+        # In that case we do an initial media_id-only comments query first.
+        if not media_id or not fb_dtsg:
             raise Exception("Missing required data fields for pagination. Cannot proceed.")
 
         return DataRequirements(

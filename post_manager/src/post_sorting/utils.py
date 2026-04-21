@@ -148,6 +148,23 @@ async def get_first_comments(json_scripts: list) -> list | None:
     return None
 
 
+def first_comments_have_reply_metadata(first_comments: list[dict[str, Any]] | None) -> bool:
+    """Return True when the extracted first comments include reply count metadata."""
+    if not first_comments:
+        return False
+
+    for edge in first_comments:
+        if not isinstance(edge, dict):
+            continue
+        node = edge.get("node", {})
+        if not isinstance(node, dict):
+            continue
+        if "child_comment_count" in node:
+            return True
+
+    return False
+
+
 async def has_next_comments(json_scripts: list) -> bool:
     """
     Check if there are more comments to load.

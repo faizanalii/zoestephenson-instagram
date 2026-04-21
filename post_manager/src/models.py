@@ -65,6 +65,12 @@ class Post(BaseModel):
 
     post_exists: bool = Field(default=True, description="Indicates if the post exists on Instagram")
 
+    retry_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of cookie-backed retries used while enriching this post",
+    )
+
     @field_validator("post_url")
     @classmethod
     def validate_instagram_url(cls, v: str) -> str:
@@ -81,3 +87,10 @@ class Post(BaseModel):
         if not v:
             raise ValueError("Username cannot be empty")
         return v
+
+
+class AccountCookies(BaseModel):
+    """Binds a Redis cookie payload to the account it came from."""
+
+    account_id: str
+    cookies: dict[str, str]
