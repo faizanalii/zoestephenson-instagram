@@ -60,7 +60,9 @@ async def search_comment(
                 username=node.get("user", {}).get("username", ""),
                 text=node.get("text", ""),
                 likes=node.get("comment_like_count", 0),
-                reply_count=node.get("child_comment_count", 0),
+                reply_count=node.get("child_comment_count", 0)
+                if node.get("child_comment_count") is not None
+                else 0,
                 date_of_comment=_created_at_to_date(created_at_value),
             )
     return None

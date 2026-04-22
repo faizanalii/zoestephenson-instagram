@@ -12,11 +12,14 @@ For each video:
 """
 
 import asyncio
+import json
 import logging
+import os
 import random
+import tempfile
 
 from src.comment_scraper import find_comment
-from src.google_sheets.output_sheets import flush_buffer, push_comment_data
+from src.google_sheets.output_sheets import flush_buffer
 from src.models import (
     CommentNotFound,
     CommentStats,
@@ -54,6 +57,53 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+MAX_RETRIES = 5
+
+
+def _save_sheets_failure(post_url: str, comment: "CommentStats", filepath: str) -> None:
+    """
+    Append a failed Sheets commit to the temp JSONL file for end-of-run retry.
+    Args:
+        post_url: The URL of the Instagram post for which the Sheets commit failed
+        comment: The CommentStats object containing the comment data that failed to commit
+        filepath: The path to the temp JSONL file where failures are recorded
+    Returns:
+        None
+    """
+    try:
+        with open(filepath, "a") as f:
+            f.write(json.dumps({"post_url": post_url, "comment": comment.model_dump()}) + "\n")
+    except OSError:
+        logger.exception("Failed to write Sheets failure record for post=%s", post_url)
+
+
+def _load_sheets_failures(filepath: str) -> dict[str, "CommentStats"]:
+    """
+    Load all Sheets-failure records from the temp JSONL file.
+    Args:
+        filepath: The path to the temp JSONL file where failures are recorded
+    Returns:
+        A dictionary mapping post URLs to CommentStats objects
+    """
+    from src.models import CommentStats  # local import to avoid circular refs at module level
+
+    results: dict[str, CommentStats] = {}
+    try:
+        with open(filepath) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                data = json.loads(line)
+                post_url = data["post_url"]
+                # Last write wins — keeps the dict idempotent if duplicates crept in.
+                results[post_url] = CommentStats(**data["comment"])
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logger.exception("Failed to read Sheets failure records from %s", filepath)
+    return results
+
 
 async def main(queue_key: str) -> None:
     """
@@ -83,6 +133,13 @@ async def main(queue_key: str) -> None:
     # Track found comments whose DB upserts are pending a successful Sheets flush.
     pending_found_comments: dict[str, CommentStats] = {}
     db = SupabaseDB()
+
+    # Temp file for comments whose Sheets push failed mid-run.
+    # Avoids re-scraping — we retry committing from this file at the end.
+    sheets_failure_fd, sheets_failure_file = tempfile.mkstemp(
+        prefix="sheets_failures_", suffix=".jsonl"
+    )
+    os.close(sheets_failure_fd)
     # Process videos until queue is empty
     while not await is_video_queue_empty(queue_key=queue_key):
         # Pop next video from queue
@@ -113,11 +170,16 @@ async def main(queue_key: str) -> None:
                 not_found_ok = db.comment_not_found(
                     CommentNotFound(post_url=post_job.post_url, comment_exists=False)
                 )
+                # Repushing the post to queue if the DB fails in updating the comment-not-found
+                # status,
+                #  so that it can be retried in the next cycle. This is to avoid losing
+                # data in case of transient DB issues.
                 if not not_found_ok:
                     logger.warning(
                         "Comment-not-found DB update failed for %s; re-queuing.",
                         post_job.post_url,
                     )
+                    await remove_url_from_processing_queue(post_job.post_url)
                     await push_post_to_queue(post_job, queue_key=queue_key)
                     error_count += 1
                 else:
@@ -142,11 +204,15 @@ async def main(queue_key: str) -> None:
                     continue
 
                 found_count += 1
-                logger.info(f"Found comment for {post_job.username} on video {post_job.post_url}")
-                logger.info(f"  Likes: {comment.likes}, Replies: {comment.reply_count}")
+                logger.info(
+                    f"Found: {post_job.username} Video: {post_job.post_url} L: {comment.likes}, R: {comment.reply_count}"
+                )
 
+                # TODO: Push the comment to the google sheet
                 # Push comment to Google Sheets buffer
-                sheets_ok = await push_comment_data(comment_stats=comment)
+                # sheets_ok = await push_comment_data(comment_stats=comment)
+                # TODO: Remove the sheet ok afterwatds
+
                 sheets_ok = True  # --- IGNORE ---
 
                 if sheets_ok:
@@ -157,10 +223,14 @@ async def main(queue_key: str) -> None:
 
                 else:
                     logger.error(
-                        "Sheets push failed for video %s. Supabase NOT updated — re-queuing.",
+                        "Sheets push failed for video %s. Saving to temp file for end-of-run retry.",
                         post_job.post_url,
                     )
-                    await push_post_to_queue(post_job, queue_key=queue_key)
+                    # Save the already-scraped result to a temp file so we can retry
+                    # committing it at the end of the run without re-scraping the post.
+                    _save_sheets_failure(post_job.post_url, comment, sheets_failure_file)
+                    await remove_url_from_processing_queue(post_job.post_url)
+                    should_clear_task_state = True
                     error_count += 1
 
             elif scrape_result.status == ScrapeStatus.RETRY:
@@ -194,14 +264,28 @@ async def main(queue_key: str) -> None:
                 queue_key,
             )
             error_count += 1
-            # TODO: Think on it, as it becomes an infinite retry loop, maybe we should add a retry count and a dead-letter queue for posts that keep failing after N attempts?
-            # Remove task from the processing queue so it can be retried in the next cycle.
-            await remove_url_from_processing_queue(post_job.post_url)
-            # Add it again to the main queue for retry in the next cycle.
-            await push_post_to_queue(post_job, queue_key=queue_key)
-
-            if should_clear_task_state:
+            post_job.retry_count += 1
+            if post_job.retry_count >= MAX_RETRIES:
+                logger.error(
+                    "Dead-lettering post=%s after %d/%d retries — removing from queue permanently.",
+                    post_job.post_url,
+                    post_job.retry_count,
+                    MAX_RETRIES,
+                )
+                await remove_url_from_processing_queue(post_job.post_url)
                 await delete_processing_task(post_job.post_url, post_job.username)
+            else:
+                logger.warning(
+                    "Re-queuing post=%s (attempt %d/%d).",
+                    post_job.post_url,
+                    post_job.retry_count,
+                    MAX_RETRIES,
+                )
+                await remove_url_from_processing_queue(post_job.post_url)
+                await push_post_to_queue(post_job, queue_key=queue_key)
+
+                if should_clear_task_state:
+                    await delete_processing_task(post_job.post_url, post_job.username)
 
     # Flush any remaining buffered rows to Google Sheets
     flush_ok = flush_buffer()
@@ -251,6 +335,53 @@ async def main(queue_key: str) -> None:
             error_count += 1
 
         pending_found_comments.clear()
+
+    # Retry any comments that had a Sheets failure mid-run (saved to temp file).
+    # These were already scraped — we only need to commit them to Supabase.
+    sheets_failures = _load_sheets_failures(sheets_failure_file)
+    if sheets_failures:
+        logger.info(
+            "Retrying %d comment(s) that had a Sheets failure mid-run...",
+            len(sheets_failures),
+        )
+        all_sheets_retries_ok = True
+        for post_url, comment in sheets_failures.items():
+            db_ok = False
+            for attempt in range(1, 4):
+                stats_ok = db.insert_found_comment(comment)
+                status_ok = db.update_comment_update_day(UpdateCommentCheckDay(post_url=post_url))
+                if stats_ok and status_ok:
+                    db_ok = True
+                    break
+                logger.warning(
+                    "Sheets-failure retry attempt %s/3 failed for post=%s. Retrying...",
+                    attempt,
+                    post_url,
+                )
+                await asyncio.sleep(2**attempt)
+            if not db_ok:
+                logger.error(
+                    "Sheets-failure retry exhausted retries for post=%s. "
+                    "Data persisted in temp file: %s",
+                    post_url,
+                    sheets_failure_file,
+                )
+                all_sheets_retries_ok = False
+                error_count += 1
+            else:
+                found_count += 1
+
+        if all_sheets_retries_ok:
+            try:
+                os.remove(sheets_failure_file)
+            except OSError:
+                pass
+    else:
+        # No failures recorded — clean up the empty temp file.
+        try:
+            os.remove(sheets_failure_file)
+        except OSError:
+            pass
 
     # Final summary
     logger.info("=" * 50)

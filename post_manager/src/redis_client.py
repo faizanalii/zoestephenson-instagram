@@ -27,7 +27,13 @@ from src.settings import (
 
 
 def _safe_json_loads(raw: str) -> dict:
-    """Parse Redis JSON payloads defensively."""
+    """
+    Parse Redis JSON payloads defensively.
+    Args:
+    raw: The raw JSON string from Redis
+    Returns:
+        dict: Parsed JSON or empty dict on failure
+    """
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, dict):
@@ -38,7 +44,15 @@ def _safe_json_loads(raw: str) -> dict:
 
 
 def _normalize_account_cookie_payload(raw_item: str) -> AccountCookies | None:
-    """Normalize cookie payloads into account_id/cookies shape."""
+    """
+    Normalize cookie payloads into account_id/cookies shape.
+
+    Args:
+        raw_item: The raw JSON string from Redis
+
+    Returns:
+        AccountCookies | None: Normalized account cookies or None on failure
+    """
     payload = _safe_json_loads(raw_item)
     if not payload:
         return None
@@ -180,7 +194,15 @@ async def get_cookies() -> dict | None:
 
 
 async def get_available_account_cookies(limit: int = 3) -> list[AccountCookies]:
-    """Read available cookie payloads without consuming the Redis pool."""
+    """
+    Read available cookie payloads without consuming the Redis pool.
+
+    Args:
+        limit: Maximum number of account cookies to return
+
+    Returns:
+        List of AccountCookies objects
+    """
     client = await get_redis_client()
     cookie_payloads: list[AccountCookies] = []
     seen_accounts: set[str] = set()
@@ -317,12 +339,10 @@ async def remove_url_from_processing_queue(post_url: str) -> bool:
 
 async def get_all_post_urls_in_processing_queue() -> set[str]:
     """
-    Docstring for get_all_post_urls_in_processing_queue
+    Get all post URLs currently in the processing queue.
 
-    :param queue_key: Description
-    :type queue_key: str
-    :return: Description
-    :rtype: set[str]
+    Returns:
+        Set of post URLs in the processing queue
     """
     client = await get_redis_client()
     video_urls = set()
@@ -343,12 +363,12 @@ async def is_video_url_in_queue(post_url: str, queue_key: str) -> bool:
     """
     Docstring for is_video_url_in_queue
 
-    :param post_url: Description
-    :type post_url: str
-    :param queue_key: Description
-    :type queue_key: str
-    :return: Description
-    :rtype: bool
+    Args:
+        post_url: The URL of the TikTok post to check
+        queue_key: The Redis queue key to check
+
+    Returns:
+        True if the post URL is in the queue, False otherwise
     """
 
     client = await get_redis_client()

@@ -42,17 +42,39 @@ from .utils import (
 
 
 def _is_reel_url(post_url: str) -> bool:
+    """
+    Check if the given post URL is a reel URL based on its structure.
+    Args:
+        post_url: The URL of the Instagram post to check
+    Returns:
+        True if the URL is identified as a reel, False otherwise
+    """
     normalized = post_url.lower()
     return "/reel/" in normalized or "/reels/" in normalized
 
 
 def _should_dead_letter(post: Post) -> bool:
-    """Return True when the post has exhausted its retry budget."""
+    """
+    Return True when the post has exhausted its retry budget.
+    Args:
+        post: The Post object being processed, which includes the retry_count
+    Returns:
+        True if the post's retry_count has reached or exceeded MAX_RETRIES, False otherwise
+    """
     return post.retry_count >= MAX_RETRIES
 
 
 async def _dead_letter(post: Post, reason: str) -> ScrapeResult:
-    """Send post to the error table and mark it as a terminal failure."""
+    """
+    Send post to the error table and mark it as a terminal failure.
+
+    Args:
+        post: The Post object being processed
+        reason: A string describing the reason for the dead-lettering
+
+    Returns:
+        A ScrapeResult object indicating that the post has been dead-lettered.
+    """
     logging.error(
         "Post %s reached max retries (%s). Dead-lettering. Reason: %s",
         post.post_url,
@@ -203,7 +225,8 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
 
     logging.info("Post %s identified as %s", post.post_url, "reel" if is_reel_post else "non-reel")
 
-    # The cursor shouldn't be a string for the initial reel comments query, but the pagination query, so we use its type to determine the initial query mode
+    # The cursor shouldn't be a string for the initial reel comments query, but the pagination query
+    # , so we use its type to determine the initial query mode
     query_mode = (
         "initial_reel_comments"
         if is_reel_post and isinstance(payload_data.cursor, str)

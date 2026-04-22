@@ -21,20 +21,42 @@ from src.redis_client import get_available_account_cookies
 from src.settings import POST_PAGE_COOKIE_RETRY_ATTEMPTS
 
 
+def _is_reel_url(post_url: str) -> bool:
+    """
+    Is the given post URL a reel URL?
+    Args:
+        post_url: The URL of the Instagram post.
+    Returns:
+        bool: True if the URL is a reel URL, False otherwise.
+    """
+    normalized = post_url.lower()
+    return "/reel/" in normalized or "/reels/" in normalized
+
+
 async def get_post(post_url: str, username: str) -> Post:
     """
     Get the post data from the given URL.
 
     Args:
-        post_url: The URL of the Instagram post
-        username: The username of the post owner
+        post_url: The URL of the Instagram post.
+        username: The username of the post owner.
     Returns:
-        A Post object containing the post data
+        A Post object containing the post data.
     """
 
     logging.info("Fetching post data for URL: %s", post_url)
 
+    # If the URL is a reel URL, we can skip using account cookies as the first comments
+    # are not available for reels regardless of authentication
+    if _is_reel_url(post_url):
+        logging.info("URL %s identified as a reel. Using anonymous fetch.", post_url)
+        page_content = await get_post_page(post_url)
+        scripts: list = await get_page_scripts(page_content)
+        json_scripts: list[dict] = await filter_scripts_with_jsons(scripts)
+        return await _build_post_from_json_scripts(post_url, username, json_scripts)
+
     cookie_candidates = await get_available_account_cookies(limit=POST_PAGE_COOKIE_RETRY_ATTEMPTS)
+
     if not cookie_candidates:
         logging.warning(
             "No Redis cookies available for %s. Falling back to anonymous fetch.",
@@ -73,6 +95,16 @@ async def _fetch_post_with_cookie_candidate(
     cookie_payload: AccountCookies,
     attempt_number: int,
 ) -> Post:
+    """
+    Attempt to fetch post data using a specific cookie payload.
+    Args:
+        post_url: The URL of the Instagram post.
+        username: The username of the post owner.
+        cookie_payload: The AccountCookies payload to use for this attempt.
+        attempt_number: The current attempt number for logging purposes.
+    Returns:
+        A Post object containing the post data, which may be missing comment metadata if the fetch was unsuccessful.
+    """
     proxy = await get_random_proxy()
     page_content = await get_post_page(
         post_url,
@@ -98,6 +130,15 @@ async def _build_post_from_json_scripts(
     username: str,
     json_scripts: list[dict],
 ) -> Post:
+    """
+    Build a Post object by extracting data from the provided JSON scripts.
+    Args:
+        post_url: The URL of the Instagram post.
+        username: The username of the post owner.
+        json_scripts: A list of JSON data extracted from the post page's script tags.
+    Returns:
+        A Post object containing the extracted data, which may be missing comment metadata if the required fields
+    """
     comment_count: int = await get_comment_count(json_scripts)
     media_id: str | None = await get_media_id(json_scripts)
     hmac_claim: str | None = await get_hmac_claim(json_scripts)
@@ -140,6 +181,13 @@ async def _build_post_from_json_scripts(
 
 
 def _post_has_required_data(post: Post) -> bool:
+    """
+    Check if the post has the required comment metadata to be processed.
+    Args:
+        post: The Post object to check.
+    Returns:
+        True if the post has the required media_id, hmac_claim, and comment metadata,
+    """
     if not post.media_id or not post.hmac_claim:
         return False
 

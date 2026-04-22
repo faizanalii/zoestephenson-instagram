@@ -23,7 +23,15 @@ _supabase_client: Client | None = None
 
 
 def _normalize_first_comments(raw_data: dict[str, Any]) -> dict[str, Any]:
-    """Ensure first_comments is a Python list for Post model parsing."""
+    """
+    Ensure first_comments is a Python list for Post model parsing.
+
+    Args:
+        raw_data: The raw data dictionary containing the first_comments field
+
+    Returns:
+        The normalized data dictionary with first_comments as a list
+    """
     value = raw_data.get("first_comments")
     if isinstance(value, str):
         try:
