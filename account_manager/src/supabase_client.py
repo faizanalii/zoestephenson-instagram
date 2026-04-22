@@ -51,7 +51,11 @@ def _parse_timestamp(value: Any) -> datetime | None:
         return None
 
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        # Ensure all comparisons are done with timezone-aware UTC datetimes.
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     except ValueError:
         logger.warning("Unable to parse timestamp value: %s", value)
         return None
