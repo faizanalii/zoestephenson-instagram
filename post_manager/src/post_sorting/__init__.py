@@ -46,11 +46,6 @@ async def get_post(post_url: str, username: str) -> Post:
 
     logging.info("Fetching post data for URL: %s", post_url)
 
-    # If the URL is a reel URL, we can skip using account cookies as the first comments
-    # are not available for reels regardless of authentication
-    if _is_reel_url(post_url):
-        logging.info("URL %s identified as a reel.", post_url)
-
     cookie_candidates = await get_available_account_cookies(limit=POST_PAGE_COOKIE_RETRY_ATTEMPTS)
 
     if not cookie_candidates:
@@ -99,7 +94,8 @@ async def _fetch_post_with_cookie_candidate(
         cookie_payload: The AccountCookies payload to use for this attempt.
         attempt_number: The current attempt number for logging purposes.
     Returns:
-        A Post object containing the post data, which may be missing comment metadata if the fetch was unsuccessful.
+        A Post object containing the post data, which may be missing comment metadata if the fetch
+          was unsuccessful.
     """
     proxy = await get_random_proxy()
     page_content = await get_post_page(
@@ -133,13 +129,18 @@ async def _build_post_from_json_scripts(
         username: The username of the post owner.
         json_scripts: A list of JSON data extracted from the post page's script tags.
     Returns:
-        A Post object containing the extracted data, which may be missing comment metadata if the required fields
+        A Post object containing the extracted data, which may be missing comment metadata if the
+        required fields
     """
     comment_count: int = await get_comment_count(json_scripts)
     media_id: str | None = await get_media_id(json_scripts)
     hmac_claim: str | None = await get_hmac_claim(json_scripts)
     first_comments: list | None = await get_first_comments(json_scripts)
     next_comments: bool | None = await has_next_comments(json_scripts)
+    # Check if the URL is a reel URL to determine if we should default
+    #  has_next_comments to True, as the first comments are not returned for
+    # reels regardless of authentication
+    is_reel: bool = _is_reel_url(post_url)
 
     if not media_id or not hmac_claim:
         logging.warning(
@@ -153,7 +154,9 @@ async def _build_post_from_json_scripts(
             media_id=None,
             hmac_claim=None,
             first_comments=first_comments or [],
-            has_next_comments=bool(next_comments),
+            has_next_comments=True if is_reel else bool(next_comments),  # By default set it to True
+            # for reels as we know the first comments are not returned for reels,
+            # so we want to make sure they get processed for comment scraping
             post_exists=False,
         )
 
@@ -171,7 +174,9 @@ async def _build_post_from_json_scripts(
         media_id=media_id,
         hmac_claim=hmac_claim,
         first_comments=first_comments or [],
-        has_next_comments=bool(next_comments),
+        has_next_comments=True if is_reel else bool(next_comments),  # By default set it to True
+        # for reels as we know the first comments are not returned for reels,
+        # so we want to make sure they get processed for comment scraping
         post_exists=True,
     )
 
