@@ -49,11 +49,7 @@ async def get_post(post_url: str, username: str) -> Post:
     # If the URL is a reel URL, we can skip using account cookies as the first comments
     # are not available for reels regardless of authentication
     if _is_reel_url(post_url):
-        logging.info("URL %s identified as a reel. Using anonymous fetch.", post_url)
-        page_content = await get_post_page(post_url)
-        scripts: list = await get_page_scripts(page_content)
-        json_scripts: list[dict] = await filter_scripts_with_jsons(scripts)
-        return await _build_post_from_json_scripts(post_url, username, json_scripts)
+        logging.info("URL %s identified as a reel.", post_url)
 
     cookie_candidates = await get_available_account_cookies(limit=POST_PAGE_COOKIE_RETRY_ATTEMPTS)
 
