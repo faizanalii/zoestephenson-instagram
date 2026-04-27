@@ -12,7 +12,7 @@ from src.redis_client import (
     get_all_post_urls_in_processing_queue,
     get_video_queue_length,
     is_video_url_in_queue,
-    push_posts_to_queue,
+    push_post_to_queue,
 )
 from src.settings import (
     KEY_VIDEO_QUEUE_40,
@@ -39,6 +39,10 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# TODO: rather than cookies are used and the accounts have to generate and push
+# new ones, we have to keep using those cookies and just refresh
+# them periodically by logging in with the scraper and
 
 
 async def main() -> None:
@@ -99,11 +103,10 @@ async def main() -> None:
     unexisting_posts: list[Post] = []
     existing_posts: list[Post] = []
     all_comments = existing_comments + new_comments
-
-    queue_list_40: list[Post] = []
-    queue_list_120: list[Post] = []
-    queue_list_240: list[Post] = []
-    queue_list_rest: list[Post] = []
+    queued_count_40 = 0
+    queued_count_120 = 0
+    queued_count_240 = 0
+    queued_count_rest = 0
 
     for comment in all_comments:
         post_url: str = comment.get("post_url", "")
@@ -152,28 +155,28 @@ async def main() -> None:
             unexisting_posts.append(post)
             continue  # For now, we just skip it
 
-        # If not in any queue, push to the appropriate queue based on comment
-        # count or other criteria
-        # For example, you could push to different queues based on comment count:
+        # Push immediately after classification so workers can start sooner.
         if post.comment_count is not None:
             if post.comment_count <= 40:
-                queue_list_40.append(post)
+                await push_post_to_queue(post, KEY_VIDEO_QUEUE_40)
+                queued_count_40 += 1
             elif post.comment_count <= 120:
-                queue_list_120.append(post)
+                await push_post_to_queue(post, KEY_VIDEO_QUEUE_120)
+                queued_count_120 += 1
             elif post.comment_count <= 240:
-                queue_list_240.append(post)
+                await push_post_to_queue(post, KEY_VIDEO_QUEUE_240)
+                queued_count_240 += 1
             else:
-                queue_list_rest.append(post)
+                await push_post_to_queue(post, KEY_VIDEO_QUEUE_REST)
+                queued_count_rest += 1
 
-    # Now push the lists to Redis
-    if queue_list_40:
-        await push_posts_to_queue(queue_list_40, KEY_VIDEO_QUEUE_40)
-    if queue_list_120:
-        await push_posts_to_queue(queue_list_120, KEY_VIDEO_QUEUE_120)
-    if queue_list_240:
-        await push_posts_to_queue(queue_list_240, KEY_VIDEO_QUEUE_240)
-    if queue_list_rest:
-        await push_posts_to_queue(queue_list_rest, KEY_VIDEO_QUEUE_REST)
+    logger.info(
+        "Queued posts immediately: <=40=%s, <=120=%s, <=240=%s, rest=%s",
+        queued_count_40,
+        queued_count_120,
+        queued_count_240,
+        queued_count_rest,
+    )
 
     # Upsert the videos to Supabase to ensure we have the latest data stored, including
     # any new media_id or hmac_claim

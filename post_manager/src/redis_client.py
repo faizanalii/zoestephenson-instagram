@@ -17,6 +17,7 @@ import redis
 
 from src.models import AccountCookies, Post
 from src.settings import (
+    COOKIE_FETCH_REUSE_COUNT,
     KEY_COOKIES_AVAILABLE,
     PROCESSING_QUEUE,
     REDIS_DB,
@@ -82,6 +83,8 @@ def _normalize_account_cookie_payload(raw_item: str) -> AccountCookies | None:
 # =============================================================================
 
 _redis_client: redis.Redis | None = None
+_cached_cookie_payloads: list[AccountCookies] = []
+_cookie_cache_use_count: int = 0
 
 
 async def get_redis_client(
@@ -203,6 +206,13 @@ async def get_available_account_cookies(limit: int = 3) -> list[AccountCookies]:
     Returns:
         List of AccountCookies objects
     """
+    global _cached_cookie_payloads
+    global _cookie_cache_use_count
+
+    if _cached_cookie_payloads and _cookie_cache_use_count < max(1, COOKIE_FETCH_REUSE_COUNT):
+        _cookie_cache_use_count += 1
+        return _cached_cookie_payloads[:limit]
+
     client = await get_redis_client()
     cookie_payloads: list[AccountCookies] = []
     seen_accounts: set[str] = set()
@@ -219,6 +229,13 @@ async def get_available_account_cookies(limit: int = 3) -> list[AccountCookies]:
 
         if len(cookie_payloads) >= limit:
             break
+
+    if cookie_payloads:
+        _cached_cookie_payloads = cookie_payloads
+        _cookie_cache_use_count = 1
+    else:
+        _cached_cookie_payloads = []
+        _cookie_cache_use_count = 0
 
     return cookie_payloads
 
