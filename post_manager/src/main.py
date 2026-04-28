@@ -40,10 +40,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# TODO: rather than cookies are used and the accounts have to generate and push
-# new ones, we have to keep using those cookies and just refresh
-# them periodically by logging in with the scraper and
-
 
 async def main() -> None:
     """
