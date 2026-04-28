@@ -164,9 +164,11 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
             post.post_url,
             post.username,
         )
+        # If no cookies are available, we can push them again to the queue for retry,
+        # or we can choose to dead-letter immediately since this is an infrastructure
+        # issue rather than a data issue. Here, we choose to re-queue with the expectation
+        # that the account manager will replenish the cookie pool soon.
         # If the retries are exhausted, dead-letter the post instead of re-queuing
-        if _should_dead_letter(post):
-            return await _dead_letter(post, reason="no_account_cookies")
         return await _requeue(post, source_queue, reason="no_account_cookies")
 
     logging.info(f"Using account {account.account_id} for scraping {post.post_url}")
