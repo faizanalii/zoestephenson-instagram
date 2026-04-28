@@ -125,9 +125,6 @@ async def _requeue(post: Post, source_queue: str, reason: str) -> ScrapeResult:
     )
 
 
-# TODO: On Failure of post page, it doesn't remove it from the processing queue
-
-
 async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
     """
     Entry point that returns matching comment model or None for a post URL and username.
@@ -215,15 +212,26 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
         json_scripts=json_scripts, html=post_page_data
     )
 
+    # If the required header data is missing, it's likely that the page
+    #  fetch failed or we got blocked,
+    # so we should retry with a different account and proxy.
+    # If we've exhausted retries, dead-letter the post instead of re-queuing
     if not header_data.lsd_token or not header_data.dtsg_token:
-        raise Exception("Missing required header tokens for pagination. Cannot proceed.")
+        if _should_dead_letter(post):
+            return await _dead_letter(
+                post,
+                reason=f"post_page_fetch_failed: {
+                    'lsd_token_missing' if not header_data.lsd_token else 'dtsg_token_missing'
+                }",
+            )
+        return await _requeue(post, source_queue, reason="post_page_fetch_failed")
 
     # Data Payload for the API
     payload_data: DataRequirements = await page_parser.get_data_requirements(
         json_scripts=json_scripts, lsd_token=header_data.lsd_token, fb_dtsg=header_data.dtsg_token
     )
 
-    is_reel_post = _is_reel_url(post.post_url)
+    is_reel_post: bool = _is_reel_url(post.post_url)
 
     logging.info("Post %s identified as %s", post.post_url, "reel" if is_reel_post else "non-reel")
 
