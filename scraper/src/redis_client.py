@@ -19,6 +19,7 @@ import redis
 
 from src.models import AccountCookies, Post
 from src.settings import (
+    COOKIE_REUSE_COUNT,
     KEY_COOKIES_AVAILABLE,
     PROCESSING_QUEUE,
     REDIS_DB,
@@ -27,6 +28,9 @@ from src.settings import (
     REDIS_PORT,
     TASK_STATE_PREFIX,
 )
+
+_cached_account_cookies: AccountCookies | None = None
+_cached_account_use_count: int = 0
 
 
 def _task_state_key(post_url: str, username: str) -> str:
@@ -201,6 +205,21 @@ async def get_next_account_with_cookies() -> AccountCookies | None:
         AccountCookies object or None if no cookies available
     """
 
+    global _cached_account_cookies
+    global _cached_account_use_count
+
+    if _cached_account_cookies is not None and _cached_account_use_count < max(
+        1, COOKIE_REUSE_COUNT
+    ):
+        _cached_account_use_count += 1
+        logging.info(
+            "Reusing cached cookies for account=%s (%s/%s)",
+            _cached_account_cookies.account_id,
+            _cached_account_use_count,
+            max(1, COOKIE_REUSE_COUNT),
+        )
+        return _cached_account_cookies
+
     client = await get_redis_client()
 
     raw_item: str | None = client.lpop(KEY_COOKIES_AVAILABLE)  # type: ignore[assignment]
@@ -208,9 +227,19 @@ async def get_next_account_with_cookies() -> AccountCookies | None:
     logging.info(f"Popped raw cookie item from Redis: {raw_item}")
 
     if not raw_item:
+        _cached_account_cookies = None
+        _cached_account_use_count = 0
         return None
 
-    return _normalize_account_cookie_payload(raw_item)
+    normalized_payload = _normalize_account_cookie_payload(raw_item)
+    if normalized_payload is None:
+        _cached_account_cookies = None
+        _cached_account_use_count = 0
+        return None
+
+    _cached_account_cookies = normalized_payload
+    _cached_account_use_count = 1
+    return normalized_payload
 
 
 async def push_processing_task(payload: dict) -> bool:

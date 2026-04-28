@@ -58,7 +58,9 @@ async def search_comment(
             return CommentStats(
                 post_url=post_url,
                 username=node.get("user", {}).get("username", ""),
-                text=node.get("text", ""),
+                # If the comment text is empty or None,
+                # Use a placeholder to indicate non-text content (e.g., images or GIFs).
+                text=node.get("text", "") if node.get("text") is not None else "IMAGE/GIF",
                 likes=node.get("comment_like_count", 0),
                 reply_count=node.get("child_comment_count", 0)
                 if node.get("child_comment_count") is not None
