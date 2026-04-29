@@ -8,7 +8,7 @@ from tenacity.stop import stop_after_attempt
 from tenacity.wait import wait_exponential
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=60))
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=60))
 async def get_post_page(
     post_url: str,
     proxy: str | None = None,
@@ -29,9 +29,15 @@ async def get_post_page(
         tls_info=True,
         proxies=[Proxy.all(url=proxy)] if proxy else None,
     )
+    # Remove the query parameters from the post URL to avoid issues with fetching the page
+    post_url = post_url.split("?")[0]
+    # If reel in the URL and not /reels/ then replace it with /reels/ to ensure we correctly identify it as a reel URL in the _build_post_from_json_scripts function
+
+    if "/reel/" in post_url and "/reels/" not in post_url:
+        post_url = post_url.replace("/reel/", "/reels/")
 
     response_obj = await client.get(
-        post_url.split("?")[0],
+        post_url,
         version=Version.HTTP_2,
         allow_redirects=True,
         cookies=cookies,

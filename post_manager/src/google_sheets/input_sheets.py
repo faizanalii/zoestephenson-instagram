@@ -40,58 +40,6 @@ def get_comment_data() -> list[dict]:
     Returns:
         list[dict]: A list of dictionaries containing comment data.
     """
-    # TODO: remove it after testing
-    return [
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DVWwywnEpfV/?igsh=MXFnem05eGEzMXZhcg==",
-        },
-        {"username": "hozeluistorente", "post_url": "https://www.instagram.com/p/DXPY6gUjs85/"},
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DVvo_AyDOiK/?igsh=bm9mcXk0eDU0d3U3",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DS2SjGyjXmM/?igsh=eXBhYTBzdmFwY3Nw",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DV6ZWl3AmZD/?igsh=bGR3YmdsdGNuM2Ew",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DWAVLxnD1eu/?igsh=MWVjMGowd3I0eXQwbA==",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DWLd1DYDEsB/?igsh=MXVxMHhtdXd0dGx2Ng==",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DWPIOHEiP4O/?igsh=anQzZGNyM3lzYjZj",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DTqbh6JjGp0/?igsh=ZWt5NXUzanFnMnFm",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DUOj5-ZiEwl/?igsh=MzY2a2RraHNlczRv",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DWeD5LnjJt4/?igsh=MXN2NnU4MHFyY2UzOA==",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DWgx7FXDQIz/?igsh=aG50b3Vwamt2NTBr",
-        },
-        {
-            "username": "arladairyuk",
-            "post_url": "https://www.instagram.com/reel/DWkLrN6Ds1B/?igsh=MWljNHFsaTBtdnFwMA==",
-        },
-    ]
     try:
         sheet = _get_sheet(INPUT_SHEET_COMMENT_STATS)
         data = sheet.get_all_records()

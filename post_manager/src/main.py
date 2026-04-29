@@ -21,11 +21,11 @@ from src.settings import (
     KEY_VIDEO_QUEUE_REST,
 )
 from src.supabase_client import (
-    bulk_upsert_posts,
     get_existing_post_urls,
     get_urls_where_comment_not_found,
     last_comment_update_urls,
     push_error_post,
+    upsert_post,
 )
 
 # Configure logging
@@ -153,6 +153,11 @@ async def main() -> None:
 
         # Push immediately after classification so workers can start sooner.
         if post.comment_count is not None:
+            # It's necessary because the scraper uses that to update the column of updated_at
+            # Push the post to the supabase
+            upsert_post(post=post)
+
+            # Push the post to the appropriate Redis queue based on comment count
             if post.comment_count <= 40:
                 await push_post_to_queue(post, KEY_VIDEO_QUEUE_40)
                 queued_count_40 += 1
@@ -173,13 +178,6 @@ async def main() -> None:
         queued_count_240,
         queued_count_rest,
     )
-
-    # Upsert the videos to Supabase to ensure we have the latest data stored, including
-    # any new media_id or hmac_claim
-    # This will also update the updated_at timestamp so we know when it was last processed
-    if existing_posts:
-        logging.info(f"Upserting {len(existing_posts)} existing posts to Supabase..")
-        bulk_upsert_posts(existing_posts)
 
     # Final summary
     for queue_key in [
