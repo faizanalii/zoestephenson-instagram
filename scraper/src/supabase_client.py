@@ -5,8 +5,10 @@ Supabase Client for Video Manager
 Provides Supabase connection for checking existing videos and upserting new ones.
 """
 
+import asyncio
 import json
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -374,6 +376,22 @@ class SupabaseDB:
                 "Set SUPABASE_URL and SUPABASE_KEY environment variables."
             )
         self.client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        self._db_write_lock = asyncio.Lock()
+        self._next_allowed_write_at = 0.0
+        self._min_write_interval_seconds = max(
+            0.0,
+            float(os.getenv("DB_WRITE_MIN_INTERVAL_SECONDS", "0.1")),
+        )
+
+    async def _wait_for_write_slot(self) -> None:
+        """Serialize write calls and enforce a minimum gap between DB writes."""
+        async with self._db_write_lock:
+            now = asyncio.get_running_loop().time()
+            if now < self._next_allowed_write_at:
+                await asyncio.sleep(self._next_allowed_write_at - now)
+            self._next_allowed_write_at = (
+                asyncio.get_running_loop().time() + self._min_write_interval_seconds
+            )
 
     def comment_not_found(self, update: CommentNotFound) -> bool:
         """
@@ -404,7 +422,7 @@ class SupabaseDB:
             logging.error("comment_not_found failed for post_url=%s: %s", update.post_url, exc)
             return False
 
-    def update_comment_update_day(self, update: UpdateCommentCheckDay) -> bool:
+    async def update_comment_update_day(self, update: UpdateCommentCheckDay) -> bool:
         """
         Update the last_comment_check date to today for a video.
 
@@ -414,6 +432,7 @@ class SupabaseDB:
             True if updated successfully
         """
         try:
+            await self._wait_for_write_slot()
             response = (
                 self.client.table(TABLE_NAME)
                 .update(
@@ -440,7 +459,7 @@ class SupabaseDB:
             )
             return False
 
-    def insert_found_comment(self, comment: CommentStats) -> bool:
+    async def insert_found_comment(self, comment: CommentStats) -> bool:
         """Insert a daily comment snapshot.
 
         The table has a unique constraint on (post_url, username, created_at),
@@ -456,6 +475,7 @@ class SupabaseDB:
             "date_of_comment": comment.date_of_comment,
         }
         try:
+            await self._wait_for_write_slot()
             self.client.table(SUPABASE_STATS_TABLE_NAME).upsert(
                 payload,
                 on_conflict="post_url,username,created_at",

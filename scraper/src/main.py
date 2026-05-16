@@ -105,6 +105,30 @@ def _load_sheets_failures(filepath: str) -> dict[str, "CommentStats"]:
     return results
 
 
+async def _commit_found_comment_with_retries(
+    db: SupabaseDB,
+    post_url: str,
+    comment: CommentStats,
+    max_attempts: int = 3,
+) -> bool:
+    """Write found comment stats and mark post updated with bounded retries."""
+    for attempt in range(1, max_attempts + 1):
+        stats_ok = await db.insert_found_comment(comment)
+        status_ok = await db.update_comment_update_day(UpdateCommentCheckDay(post_url=post_url))
+        if stats_ok and status_ok:
+            return True
+
+        logger.warning(
+            "Supabase commit attempt %s/%s failed for post=%s. Retrying...",
+            attempt,
+            max_attempts,
+            post_url,
+        )
+        await asyncio.sleep(2**attempt)
+
+    return False
+
+
 async def main(queue_key: str) -> None:
     """
     Main function for the scraper module.
@@ -188,7 +212,10 @@ async def main(queue_key: str) -> None:
 
             elif scrape_result.status == ScrapeStatus.FOUND:
                 logging.info(
-                    "Comment found for %s on video %s. Preparing to push to Google Sheets and update Supabase.",
+                    (
+                        "Comment found for %s on video %s. "
+                        "Preparing to push to Google Sheets and update Supabase."
+                    ),
                     post_job.username,
                     post_job.post_url,
                 )
@@ -205,7 +232,8 @@ async def main(queue_key: str) -> None:
 
                 found_count += 1
                 logger.info(
-                    f"Found: {post_job.username} Video: {post_job.post_url} L: {comment.likes}, R: {comment.reply_count}"
+                    f"Found: {post_job.username} Video: {post_job.post_url} "
+                    f"L: {comment.likes}, R: {comment.reply_count}"
                 )
 
                 # TODO: Push the comment to the google sheet
@@ -216,14 +244,34 @@ async def main(queue_key: str) -> None:
                 sheets_ok = True  # --- IGNORE ---
 
                 if sheets_ok:
-                    # Keep only one pending result per post_url to stay idempotent.
-                    pending_found_comments[post_job.post_url] = comment
-                    should_clear_task_state = True
-                    await remove_url_from_processing_queue(post_job.post_url)
+                    # Persist immediately so post_manager can see this post as processed today.
+                    db_ok = await _commit_found_comment_with_retries(
+                        db=db,
+                        post_url=post_job.post_url,
+                        comment=comment,
+                    )
+
+                    if db_ok:
+                        should_clear_task_state = True
+                        await remove_url_from_processing_queue(post_job.post_url)
+                        await delete_processing_task(post_job.post_url, post_job.username)
+                    else:
+                        logger.error(
+                            "Immediate Supabase commit failed for post=%s. "
+                            "Deferring retry to end-of-run.",
+                            post_job.post_url,
+                        )
+                        # Keep only one pending result per post_url to stay idempotent.
+                        pending_found_comments[post_job.post_url] = comment
+                        await remove_url_from_processing_queue(post_job.post_url)
+                        error_count += 1
 
                 else:
                     logger.error(
-                        "Sheets push failed for video %s. Saving to temp file for end-of-run retry.",
+                        (
+                            "Sheets push failed for video %s. "
+                            "Saving to temp file for end-of-run retry."
+                        ),
                         post_job.post_url,
                     )
                     # Save the already-scraped result to a temp file so we can retry
@@ -292,21 +340,11 @@ async def main(queue_key: str) -> None:
     if flush_ok and pending_found_comments:
         logger.info(f"Committing {len(pending_found_comments)} pending Supabase updates...")
         for post_url, comment in pending_found_comments.items():
-            # Retry the DB write in-place rather than re-scraping the whole post.
-            # The comment is already in memory; only the DB call needs to succeed.
-            db_ok = False
-            for attempt in range(1, 4):  # up to 3 attempts
-                stats_ok = db.insert_found_comment(comment)
-                status_ok = db.update_comment_update_day(UpdateCommentCheckDay(post_url=post_url))
-                if stats_ok and status_ok:
-                    db_ok = True
-                    break
-                logger.warning(
-                    "Supabase commit attempt %s/3 failed for post=%s. Retrying...",
-                    attempt,
-                    post_url,
-                )
-                await asyncio.sleep(2**attempt)  # 2s, 4s, 8s
+            db_ok = await _commit_found_comment_with_retries(
+                db=db,
+                post_url=post_url,
+                comment=comment,
+            )
 
             if not db_ok:
                 logger.error(
@@ -346,19 +384,11 @@ async def main(queue_key: str) -> None:
         )
         all_sheets_retries_ok = True
         for post_url, comment in sheets_failures.items():
-            db_ok = False
-            for attempt in range(1, 4):
-                stats_ok = db.insert_found_comment(comment)
-                status_ok = db.update_comment_update_day(UpdateCommentCheckDay(post_url=post_url))
-                if stats_ok and status_ok:
-                    db_ok = True
-                    break
-                logger.warning(
-                    "Sheets-failure retry attempt %s/3 failed for post=%s. Retrying...",
-                    attempt,
-                    post_url,
-                )
-                await asyncio.sleep(2**attempt)
+            db_ok = await _commit_found_comment_with_retries(
+                db=db,
+                post_url=post_url,
+                comment=comment,
+            )
             if not db_ok:
                 logger.error(
                     "Sheets-failure retry exhausted retries for post=%s. "
@@ -393,19 +423,23 @@ async def main(queue_key: str) -> None:
 
 
 if __name__ == "__main__":
-    while True:
-        for queue_key in [
+
+    async def run_all_queues_once() -> None:
+        queue_keys = [
             KEY_VIDEO_QUEUE_40,
             KEY_VIDEO_QUEUE_120,
             KEY_VIDEO_QUEUE_240,
             KEY_VIDEO_QUEUE_REST,
-        ]:
-            logger.info(f"Checking queue: {queue_key}")
-            asyncio.run(main(queue_key=queue_key))
+        ]
+        logger.info("Checking all queues in parallel...")
+        await asyncio.gather(*(main(queue_key=queue_key) for queue_key in queue_keys))
+        logger.info("Finished processing all queues for this cycle.")
 
-            logger.info(f"Finished processing queue: {queue_key}")
-            # Small delay between queue checks
-            asyncio.run(asyncio.sleep(5))
-        # Delay before next full cycle through queues
-        logger.info("Waiting before next queue cycle...")
-        asyncio.run(asyncio.sleep(100))
+    async def run_forever() -> None:
+        while True:
+            await run_all_queues_once()
+            # Delay before next full cycle through queues.
+            logger.info("Waiting before next queue cycle...")
+            await asyncio.sleep(100)
+
+    asyncio.run(run_forever())

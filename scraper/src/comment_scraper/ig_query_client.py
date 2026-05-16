@@ -140,7 +140,7 @@ async def build_query_data(
     variables = {
         "after": after_cursor,
         "before": None,
-        "first": 10,
+        "first": 50,
         "last": None,
         "media_id": media_id,
         "sort_order": "popular",
