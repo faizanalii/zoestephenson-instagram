@@ -3,7 +3,10 @@ Main entry point for the post manager application. Initializes the scraper
 and starts the worker loop.
 """
 
+import asyncio
 import logging
+import os
+from collections.abc import Iterable
 
 from src.google_sheets import get_comment_data
 from src.models import Post
@@ -19,6 +22,7 @@ from src.settings import (
     KEY_VIDEO_QUEUE_120,
     KEY_VIDEO_QUEUE_240,
     KEY_VIDEO_QUEUE_REST,
+    PROCESSING_QUEUE,
 )
 from src.supabase_client import (
     get_existing_post_urls,
@@ -39,6 +43,24 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+POST_FETCH_BATCH_SIZE = int(os.getenv("POST_FETCH_BATCH_SIZE", "5"))
+
+
+def _chunked(items: list[tuple[str, str]], size: int) -> Iterable[list[tuple[str, str]]]:
+    """Yield fixed-size chunks from a list."""
+    if size <= 0:
+        size = 1
+    for idx in range(0, len(items), size):
+        yield items[idx : idx + size]
+
+
+async def _fetch_post_job(post_url: str, username: str) -> Post | Exception:
+    """Fetch one post and return either Post or the raised exception."""
+    try:
+        return await get_post(post_url, username)
+    except Exception as exc:  # noqa: BLE001
+        return exc
 
 
 async def main() -> None:
@@ -97,12 +119,12 @@ async def main() -> None:
     logging.info("New posts to add to queue: %d", len(new_comments))
 
     unexisting_posts: list[Post] = []
-    existing_posts: list[Post] = []
     all_comments = existing_comments + new_comments
     queued_count_40 = 0
     queued_count_120 = 0
     queued_count_240 = 0
     queued_count_rest = 0
+    candidate_jobs: list[tuple[str, str]] = []
 
     for comment in all_comments:
         post_url: str = comment.get("post_url", "")
@@ -121,6 +143,7 @@ async def main() -> None:
             KEY_VIDEO_QUEUE_120,
             KEY_VIDEO_QUEUE_240,
             KEY_VIDEO_QUEUE_REST,
+            PROCESSING_QUEUE,
         ]:
             if await is_video_url_in_queue(post_url, queue_key):
                 already_in_queue = True
@@ -130,46 +153,56 @@ async def main() -> None:
             logger.info(f"Post already in queue: {post_url}")
             continue
 
-        logger.info(f"Adding existing post to processing queue: {post_url}")
+        candidate_jobs.append((post_url, username))
 
-        # Get the post data again to ensure we have the latest media_id
-        #  and hmac_claim (in case they were missing before)
-        try:
-            post: Post = await get_post(post_url, username)
-            existing_posts.append(post)
+    logger.info(
+        "Prepared %s post jobs. Fetching in batches of %s...",
+        len(candidate_jobs),
+        POST_FETCH_BATCH_SIZE,
+    )
 
-        except Exception as e:
-            logger.error(f"Error occurred while fetching post data for {post_url}: {e}")
-            # pUsh an error post to Supabase for tracking
-            push_error_post(post_url=post_url, error_message=str(e))
-            continue
+    for batch_idx, batch in enumerate(_chunked(candidate_jobs, POST_FETCH_BATCH_SIZE), start=1):
+        logger.info("Processing batch %s with %s posts", batch_idx, len(batch))
+        batch_results = await asyncio.gather(
+            *[_fetch_post_job(post_url, username) for post_url, username in batch]
+        )
 
-        if not post.media_id or not post.hmac_claim:
-            logger.warning(f"Post {post_url} is missing media_id or hmac_claim.")
-            # You could choose to add it to a separate queue for
-            # reprocessing or handle it differently
-            unexisting_posts.append(post)
-            continue  # For now, we just skip it
+        for (post_url, _username), result in zip(batch, batch_results, strict=True):
+            if isinstance(result, Exception):
+                logger.error(f"Error occurred while fetching post data for {post_url}: {result}")
+                # Push an error post to Supabase for tracking
+                push_error_post(post_url=post_url, error_message=str(result))
+                continue
 
-        # Push immediately after classification so workers can start sooner.
-        if post.comment_count is not None:
-            # It's necessary because the scraper uses that to update the column of updated_at
-            # Push the post to the supabase
-            upsert_post(post=post)
+            post = result
+            logger.info(f"Adding existing post to processing queue: {post_url}")
 
-            # Push the post to the appropriate Redis queue based on comment count
-            if post.comment_count <= 40:
-                await push_post_to_queue(post, KEY_VIDEO_QUEUE_40)
-                queued_count_40 += 1
-            elif post.comment_count <= 120:
-                await push_post_to_queue(post, KEY_VIDEO_QUEUE_120)
-                queued_count_120 += 1
-            elif post.comment_count <= 240:
-                await push_post_to_queue(post, KEY_VIDEO_QUEUE_240)
-                queued_count_240 += 1
-            else:
-                await push_post_to_queue(post, KEY_VIDEO_QUEUE_REST)
-                queued_count_rest += 1
+            if not post.media_id or not post.hmac_claim:
+                logger.warning(f"Post {post_url} is missing media_id or hmac_claim.")
+                # You could choose to add it to a separate queue for
+                # reprocessing or handle it differently
+                unexisting_posts.append(post)
+                continue  # For now, we just skip it
+
+            # Push immediately after classification so workers can start sooner.
+            if post.comment_count is not None:
+                # It's necessary because the scraper uses that to update the column of updated_at
+                # Push the post to the supabase
+                upsert_post(post=post)
+
+                # Push the post to the appropriate Redis queue based on comment count
+                if post.comment_count <= 40:
+                    await push_post_to_queue(post, KEY_VIDEO_QUEUE_40)
+                    queued_count_40 += 1
+                elif post.comment_count <= 120:
+                    await push_post_to_queue(post, KEY_VIDEO_QUEUE_120)
+                    queued_count_120 += 1
+                elif post.comment_count <= 240:
+                    await push_post_to_queue(post, KEY_VIDEO_QUEUE_240)
+                    queued_count_240 += 1
+                else:
+                    await push_post_to_queue(post, KEY_VIDEO_QUEUE_REST)
+                    queued_count_rest += 1
 
     logger.info(
         "Queued posts immediately: <=40=%s, <=120=%s, <=240=%s, rest=%s",
@@ -193,6 +226,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    import asyncio
-
     asyncio.run(main())

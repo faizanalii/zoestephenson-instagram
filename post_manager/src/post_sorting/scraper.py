@@ -40,7 +40,7 @@ async def get_post_page(
         post_url,
         version=Version.HTTP_2,
         allow_redirects=True,
-        cookies=cookies,
+        cookies=cookies or {},
     )
 
     if response_obj.status_code.as_int() != 200:

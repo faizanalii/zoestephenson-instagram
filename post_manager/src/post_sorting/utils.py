@@ -19,7 +19,7 @@ async def get_random_proxy() -> str:
     Returns:
         str: A random proxy string.
     """
-
+    return ""
     country: str = random.choice(PROXY_COUNTRIES_LIST)
     proxy_url: str = PROXY.format(COUNTRY=country)
 

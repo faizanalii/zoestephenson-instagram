@@ -7,6 +7,9 @@ Provides Supabase connection for checking existing videos and upserting new ones
 
 import json
 import logging
+import os
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,6 +23,54 @@ from src.settings import ERROR_TABLE_NAME, SUPABASE_KEY, SUPABASE_URL, TABLE_NAM
 # =============================================================================
 
 _supabase_client: Client | None = None
+
+SUPABASE_MAX_RETRIES = max(1, int(os.getenv("SUPABASE_MAX_RETRIES", "4")))
+SUPABASE_RETRY_BASE_SECONDS = max(0.1, float(os.getenv("SUPABASE_RETRY_BASE_SECONDS", "1.0")))
+
+
+def _is_retryable_supabase_error(exc: Exception) -> bool:
+    """Return True for transient network/timeout errors worth retrying."""
+    message = str(exc).lower()
+    retryable_terms = (
+        "timeout",
+        "timed out",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "network is unreachable",
+        "server disconnected",
+    )
+    return any(term in message for term in retryable_terms)
+
+
+def _execute_with_retries(operation: Callable[[], Any], op_name: str) -> Any:
+    """Execute a Supabase operation with bounded exponential backoff retries."""
+    last_error: Exception | None = None
+
+    for attempt in range(1, SUPABASE_MAX_RETRIES + 1):
+        try:
+            return operation()
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            should_retry = _is_retryable_supabase_error(exc) and attempt < SUPABASE_MAX_RETRIES
+            if not should_retry:
+                raise
+
+            delay = SUPABASE_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            logging.warning(
+                "%s failed (%s/%s): %s. Retrying in %.1fs...",
+                op_name,
+                attempt,
+                SUPABASE_MAX_RETRIES,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+
+    # Defensive fallback; loop should either return or raise above.
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"{op_name} failed with unknown error")
 
 
 def _normalize_first_comments(raw_data: dict[str, Any]) -> dict[str, Any]:
@@ -270,8 +321,14 @@ def upsert_post(post: Post) -> Post | None:
         "post_exists": post.post_exists,
     }
 
-    # Upsert based on post_url
-    response = client.table(TABLE_NAME).upsert(insert_data, on_conflict="post_url").execute()
+    try:
+        response = _execute_with_retries(
+            lambda: client.table(TABLE_NAME).upsert(insert_data, on_conflict="post_url").execute(),
+            op_name=f"upsert_post({post.post_url})",
+        )
+    except Exception as exc:
+        logging.error("upsert_post failed for post_url=%s: %s", post.post_url, exc)
+        return None
 
     if response.data:
         raw_data: dict[str, Any] = response.data[0]  # type: ignore[assignment]
@@ -316,7 +373,16 @@ def bulk_upsert_posts(posts: list[Post]) -> int:
     for i in range(0, len(insert_data), batch_size):
         batch = insert_data[i : i + batch_size]
 
-        response = client.table(TABLE_NAME).upsert(batch, on_conflict="post_url").execute()
+        try:
+            response = _execute_with_retries(
+                lambda batch=batch: (
+                    client.table(TABLE_NAME).upsert(batch, on_conflict="post_url").execute()
+                ),
+                op_name=f"bulk_upsert_posts(batch_start={i})",
+            )
+        except Exception as exc:
+            logging.error("bulk_upsert_posts failed for batch_start=%s: %s", i, exc)
+            continue
 
         processed += len(response.data)
 
