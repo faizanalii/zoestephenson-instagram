@@ -18,9 +18,17 @@ class Account:
     email: str
     password: str
     proxy: str
+    two_factor: bool = False
+    two_factor_url: str | None = None
 
 
-def build_account(account_id: str, email: str, password: str) -> Account:
+def build_account(
+    account_id: str,
+    email: str,
+    password: str,
+    two_factor: bool = False,
+    two_factor_url: str | None = None,
+) -> Account:
     """Build an Account with a randomized proxy assignment."""
     country = random.choice(PROXY_COUNTRIES)
     proxy = PROXY_TEMPLATE.replace("{COUNTRY}", country)
@@ -29,6 +37,8 @@ def build_account(account_id: str, email: str, password: str) -> Account:
         email=email.strip(),
         password=password,
         proxy=proxy,
+        two_factor=two_factor,
+        two_factor_url=two_factor_url,
     )
 
 
@@ -41,10 +51,15 @@ def build_account_from_row(row: Mapping[str, Any]) -> Account:
     if not account_id or not email or not password:
         raise ValueError("Supabase account row is missing id, email, or password")
 
+    two_factor = bool(row.get("two_factor", False))
+    two_factor_url = row.get("two_factor_url") or None
+
     account = build_account(
         account_id=str(account_id),
         email=str(email),
         password=str(password),
+        two_factor=two_factor,
+        two_factor_url=two_factor_url,
     )
     logger.info("Prepared leased account %s", account.email)
     return account

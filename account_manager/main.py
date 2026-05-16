@@ -92,7 +92,8 @@ def run_account_worker(account: Account) -> None:
                 time.sleep(COOKIE_POOL_IDLE_SLEEP_SECONDS)
                 continue
 
-            driver.simulate_human_behaviour()
+            # driver.simulate_human_behaviour()
+            time.sleep(5)
 
             cookies = driver.get_cookies_dict()
             if not cookies or "datr" not in cookies or not driver.is_logged_in():

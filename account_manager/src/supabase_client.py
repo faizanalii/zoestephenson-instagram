@@ -79,7 +79,7 @@ def _fetch_claim_candidates(limit: int = 25) -> list[dict[str, Any]]:
     response = (
         client.table(ACCOUNTS_TABLE_NAME)
         .select(
-            "id,email,password,in_use,skip_account,error,claimed_by,claimed_at,last_heartbeat"
+            "id,email,password,in_use,skip_account,error,claimed_by,claimed_at,last_heartbeat,two_factor,two_factor_url"
         )
         .eq("skip_account", False)
         .limit(limit)

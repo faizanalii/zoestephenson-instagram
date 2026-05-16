@@ -3,3 +3,4 @@ accounts.*.txt
 .env.local
 downloaded_files/account_cookies/
 *.env
+notes.txt
