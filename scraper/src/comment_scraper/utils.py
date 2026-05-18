@@ -78,7 +78,7 @@ async def get_random_proxy() -> str:
         str: A random proxy string.
     """
     # TODO: Disabled the proxy for now
-    return ""
+    # return ""
     country: str = random.choice(PROXY_COUNTRIES_LIST)
     proxy_url: str = PROXY.format(COUNTRY=country)
 

@@ -22,7 +22,7 @@ INPUT_SHEET_COMMENT_STATS: str = os.getenv(
     "INPUT_SHEET_COMMENT_STATS", "14HP03EiwdcXTBYpoY0nmcHHoqqLIqaKXuZlTBF3e59M"
 )
 
-OUTPUT_SHEET_COMMENT_STATS: str = ""
+OUTPUT_SHEET_COMMENT_STATS: str = "1zhjLCtrtx36j7QvKJTOLGMBbK8Q5bsdIpQIKC682x9M"
 SUPABASE_STATS_TABLE_NAME: str = os.getenv("SUPABASE_STATS_TABLE_NAME", "instagram_stats")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -34,7 +34,7 @@ COMMENTS_FILE_PATH: str = "comments_data.json"
 
 # Sheets Credentials
 SHEETS_CREDENTIALS_FILE: str = "zoecredentials.json"
-
+OUTPUT_SHEET_CREDS_FILE: str = "tomsheetcreds.json"
 # Account Cookies
 KEY_COOKIES_AVAILABLE = "cookies:available"
 COOKIE_REUSE_COUNT: int = int(os.getenv("COOKIE_REUSE_COUNT", "5"))

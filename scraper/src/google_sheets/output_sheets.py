@@ -33,7 +33,7 @@ from tenacity import (
 from src.models import CommentStats
 from src.settings import (
     OUTPUT_SHEET_COMMENT_STATS,
-    SHEETS_CREDENTIALS_FILE,
+    OUTPUT_SHEET_CREDS_FILE,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def _get_sheet(sheet_id: str, worksheet_name: str = "MASTER"):
         return _cached_sheet
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(SHEETS_CREDENTIALS_FILE, scopes=scopes)
+    creds = Credentials.from_service_account_file(OUTPUT_SHEET_CREDS_FILE, scopes=scopes)
     client = gspread.authorize(creds)  # type: ignore[assignment]
     sheet = client.open_by_key(sheet_id).worksheet(worksheet_name)
 
