@@ -22,7 +22,9 @@ INPUT_SHEET_COMMENT_STATS: str = os.getenv(
     "INPUT_SHEET_COMMENT_STATS", "14HP03EiwdcXTBYpoY0nmcHHoqqLIqaKXuZlTBF3e59M"
 )
 
-OUTPUT_SHEET_COMMENT_STATS: str = "1zhjLCtrtx36j7QvKJTOLGMBbK8Q5bsdIpQIKC682x9M"
+OUTPUT_SHEET_COMMENT_STATS: str = os.getenv(
+    "OUTPUT_SHEET_COMMENT_STATS", "1zhjLCtrtx36j7QvKJTOLGMBbK8Q5bsdIpQIKC682x9M"
+)
 SUPABASE_STATS_TABLE_NAME: str = os.getenv("SUPABASE_STATS_TABLE_NAME", "instagram_stats")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -33,8 +35,8 @@ ERROR_TABLE_NAME = "instagram_error_videos"
 COMMENTS_FILE_PATH: str = "comments_data.json"
 
 # Sheets Credentials
-SHEETS_CREDENTIALS_FILE: str = "zoecredentials.json"
-OUTPUT_SHEET_CREDS_FILE: str = "tomsheetcreds.json"
+SHEETS_CREDENTIALS_FILE: str = os.getenv("SHEETS_CREDENTIALS_FILE", "zoecredentials.json")
+OUTPUT_SHEET_CREDS_FILE: str = os.getenv("OUTPUT_SHEET_CREDS_FILE", "tomsheetcreds.json")
 # Account Cookies
 KEY_COOKIES_AVAILABLE = "cookies:available"
 COOKIE_REUSE_COUNT: int = int(os.getenv("COOKIE_REUSE_COUNT", "5"))
@@ -47,8 +49,13 @@ KEY_VIDEO_QUEUE_REST = "instagram:rest"
 PROCESSING_QUEUE: str = "instagram:processing"
 TASK_STATE_PREFIX: str = "instagram:task_state"
 
-PROXY: str = "http://62570d546c329a5d28b4__cr.{COUNTRY}:7f100f701db20f32@74.81.81.81:823"
-PROXY_COUNTRIES_LIST: list[str] = ["de", "be", "fr", "nl", "us", "gb", "ca", "au", "at"]
+PROXY: str = os.getenv(
+    "PROXY",
+    "http://62570d546c329a5d28b4__cr.{COUNTRY}:7f100f701db20f32@74.81.81.81:823",
+)
+PROXY_COUNTRIES_LIST: list[str] = [
+    c.strip() for c in os.getenv("PROXY_COUNTRIES_LIST", "de,be,fr,nl,us,gb,ca,au,at").split(",") if c.strip()
+]
 
 # Retry behavior for comment scraping requeues.
 RETRY_DELAY_MIN_SECONDS: int = int(os.getenv("RETRY_DELAY_MIN_SECONDS", "120"))

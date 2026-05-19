@@ -8,7 +8,7 @@ from tenacity.stop import stop_after_attempt
 from tenacity.wait import wait_exponential
 
 
-@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=60))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=20))
 async def get_post_page(
     post_url: str,
     proxy: str | None = None,

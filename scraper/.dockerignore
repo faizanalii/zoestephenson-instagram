@@ -1,0 +1,12 @@
+.venv
+__pycache__
+*.pyc
+.env
+.git
+.gitignore
+*.log
+notes.txt
+Debugging
+tests
+.vscode
+*.code-workspace

@@ -1,0 +1,63 @@
+# =============================================================================
+# Instagram Comment Scraper — Production Docker Compose
+# =============================================================================
+# Redis runs on a separate server — configure REDIS_HOST in .env
+#
+# Deploy:
+#   1. cp .env.example .env   → fill in all values (including external Redis)
+#   2. docker compose up -d --build
+#
+# Monitor:
+#   docker compose logs -f scraper_1
+#   docker compose logs -f scraper_2
+#   docker compose logs -f scraper_3
+#   docker compose logs -f post_manager
+#
+# Scaling:
+#   Three scraper instances pull from the same Redis queues in parallel.
+#   To add more: duplicate a scraper_N block (rename container_name too)
+#   or use: docker compose up -d --scale scraper_1=3 (requires removing
+#   container_name from the scraper block).
+# =============================================================================
+
+x-scraper: &scraper-defaults
+  build:
+    context: ./scraper
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file:
+    - .env
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "10"
+
+services:
+  # ── Post Manager (producer — every 8 hours) ─────────────────────────────
+  post_manager:
+    build:
+      context: ./post_manager
+      dockerfile: Dockerfile
+    container_name: ig-post-manager
+    restart: unless-stopped
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Scrapers (3 parallel consumers — every 3 hours) ─────────────────────
+  scraper_1:
+    <<: *scraper-defaults
+    container_name: ig-scraper-1
+
+  scraper_2:
+    <<: *scraper-defaults
+    container_name: ig-scraper-2
+
+  scraper_3:
+    <<: *scraper-defaults
+    container_name: ig-scraper-3

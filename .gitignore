@@ -18,4 +18,8 @@ build/
 *.egg
 *.egg-info/
 zoecredentials.json
+tomsheetcreds.json
 creds.json
+.env
+!.env.example
+creds.txt

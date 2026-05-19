@@ -120,6 +120,10 @@ class CommentStats(BaseModel):
         ge=0,
         description="Number of replies to the comment",
     )
+    comment_id: str | None = Field(
+        default=None,
+        description="Instagram comment pk (used for child comment API lookups)",
+    )
     date_of_comment: str = Field(
         ..., description="Date of the comment"
     )  # Convert the timestamp (1748573540) to a string in the format "YYYY-MM-DD" when creating an instance of CommentStats.

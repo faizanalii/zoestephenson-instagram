@@ -1,6 +1,17 @@
 """
-Entry point for the comment scraper. This file is responsible for starting
-the scraper and orchestrating the different components.
+Entry point for the comment scraper.
+
+Orchestrates the cookie-free comment search pipeline:
+  1. Check cached first_comments from the database.
+  2. Fetch the post page (no account cookies).
+  3. Extract GraphQL tokens from embedded JSON + HTML.
+  4. Paginate through comments using Instagram's public GraphQL API.
+  5. When the target comment is found, verify the reply count via
+     the child-comments API (also cookie-free).
+  6. Rotate proxies per page to avoid IP-based rate limiting.
+
+Cookie-free operation means we never depend on account-manager
+capacity and can scale independently.
 """
 
 import asyncio
@@ -8,10 +19,7 @@ import logging
 import random
 from typing import Any
 
-from curl_cffi import requests
-
 from src.models import (
-    AccountCookies,
     CommentStats,
     DataRequirements,
     HeaderRequirements,
@@ -20,15 +28,15 @@ from src.models import (
     ScrapeStatus,
 )
 from src.redis_client import (
-    get_next_account_with_cookies,
     push_post_to_queue,
     remove_url_from_processing_queue,
 )
 from src.settings import MAX_RATE_LIMIT_RETRIES, MAX_RETRIES
 from src.supabase_client import push_error_post
 
+from .child_comments import get_child_comment_count
 from .ig_query_client import run_graphql_query
-from .post_page import get_post_page
+from .post_page import _is_reel_url, get_post_page
 from .utils import (
     PostPageParser,
     classify_response,
@@ -40,41 +48,17 @@ from .utils import (
     search_comment,
 )
 
-
-def _is_reel_url(post_url: str) -> bool:
-    """
-    Check if the given post URL is a reel URL based on its structure.
-    Args:
-        post_url: The URL of the Instagram post to check
-    Returns:
-        True if the URL is identified as a reel, False otherwise
-    """
-    normalized = post_url.lower()
-    return "/reel/" in normalized or "/reels/" in normalized
+_MAX_CONSECUTIVE_EMPTY = 2
+_MAX_PAGINATION_DEPTH = 300
 
 
 def _should_dead_letter(post: Post) -> bool:
-    """
-    Return True when the post has exhausted its retry budget.
-    Args:
-        post: The Post object being processed, which includes the retry_count
-    Returns:
-        True if the post's retry_count has reached or exceeded MAX_RETRIES, False otherwise
-    """
+    """Return True when the post has exhausted its retry budget."""
     return post.retry_count >= MAX_RETRIES
 
 
 async def _dead_letter(post: Post, reason: str) -> ScrapeResult:
-    """
-    Send post to the error table and mark it as a terminal failure.
-
-    Args:
-        post: The Post object being processed
-        reason: A string describing the reason for the dead-lettering
-
-    Returns:
-        A ScrapeResult object indicating that the post has been dead-lettered.
-    """
+    """Send post to the error table and mark it as a terminal failure."""
     logging.error(
         "Post %s reached max retries (%s). Dead-lettering. Reason: %s",
         post.post_url,
@@ -93,22 +77,10 @@ async def _dead_letter(post: Post, reason: str) -> ScrapeResult:
 
 
 async def _requeue(post: Post, source_queue: str, reason: str) -> ScrapeResult:
-    """
-    Increment retry counter, push back to source queue, remove from processing queue.
-    Args:
-        post: The Post object being processed
-        source_queue: The Redis queue key to push the post back onto for retry
-        reason: A string describing the reason for the retry, used for logging and error tracking
-    Returns:
-        A ScrapeResult object indicating that the post has been re-queued for retry.
-    """
-
+    """Increment retry counter, push back to source queue."""
     incremented = post.model_copy(update={"retry_count": post.retry_count + 1})
-
     await remove_url_from_processing_queue(post_url=post.post_url)
-
     await push_post_to_queue(post_job=incremented, queue_key=source_queue)
-
     logging.warning(
         "Re-queued post=%s retry=%s/%s reason=%s",
         post.post_url,
@@ -125,23 +97,62 @@ async def _requeue(post: Post, source_queue: str, reason: str) -> ScrapeResult:
     )
 
 
+async def _verify_reply_count(
+    comment: CommentStats,
+    header_data: HeaderRequirements,
+    media_id: str,
+) -> CommentStats:
+    """
+    Verify / correct the reply_count via the child-comments API.
+
+    When ``child_comment_count`` is missing (null) or unreliable in the
+    main comment response, this makes a single cookie-free API call to
+    count the actual edges returned for the parent comment.
+
+    Falls back to the original ``reply_count`` on any error.
+    """
+    if not comment.comment_id:
+        return comment
+
+    try:
+        verified_count = await get_child_comment_count(
+            media_id=media_id,
+            parent_comment_id=comment.comment_id,
+            csrf_token=header_data.csrf_token,
+            app_id=header_data.app_id,
+            lsd_token=header_data.lsd_token,
+            proxy=await get_random_proxy(),
+        )
+        logging.info(
+            "Child-comment API returned %s replies for comment=%s "
+            "(original reply_count=%s)",
+            verified_count,
+            comment.comment_id,
+            comment.reply_count,
+        )
+        return comment.model_copy(update={"reply_count": verified_count})
+    except Exception:
+        logging.exception(
+            "Child-comment API failed for comment=%s, keeping original reply_count",
+            comment.comment_id,
+        )
+        return comment
+
+
 async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
     """
-    Entry point that returns matching comment model or None for a post URL and username.
-    Args:
-        post: The Post object containing the URL and username to search comments for
-        source_queue: Optional string indicating the source queue for logging and potential
-    Returns:
-        A ScrapeResult object if a matching comment is found, or None if not found or an
-        error occurs.
+    Search a post for a comment by the target username.
+
+    Returns a ``ScrapeResult`` with status FOUND, NOT_FOUND, RETRY,
+    or ERROR.  All HTTP requests are cookie-free — tokens extracted
+    from the public page drive the GraphQL pagination, and IPs rotate
+    per page to avoid rate limits.
     """
 
-    # Check if the username exists in the first comments for the post
-
+    # ── Phase 1: check cached first_comments ────────────────────────────
     comment: CommentStats | None = await search_comment(
         comments=post.first_comments, username=post.username, post_url=post.post_url
     )
-
     if comment:
         return ScrapeResult(
             status=ScrapeStatus.FOUND,
@@ -150,148 +161,91 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
             comment=comment,
         )
 
-    # Get an account used for scraping
-    account: AccountCookies | None = await get_next_account_with_cookies()
-
-    # If the account cookies is not available, put the account again into the queue of task
-    # and return None to trigger retry with exponential backoff
-    if account is None:
-        logging.warning(
-            "No account cookies available for scraping post=%s username=%s.",
-            post.post_url,
-            post.username,
-        )
-        # If no cookies are available, we can push them again to the queue for retry,
-        # or we can choose to dead-letter immediately since this is an infrastructure
-        # issue rather than a data issue. Here, we choose to re-queue with the expectation
-        # that the account manager will replenish the cookie pool soon.
-        # If the retries are exhausted, dead-letter the post instead of re-queuing
-        return await _requeue(post, source_queue, reason="no_account_cookies")
-
-    logging.info(f"Using account {account.account_id} for scraping {post.post_url}")
-
-    # Pull a random proxy for the request, use that proxy throughout the scraping
+    # ── Phase 2: fetch the post page (no cookies) ───────────────────────
     proxy_url: str = await get_random_proxy()
 
-    # If not found in the first comments, return None to trigger pagination fallback
-    # Get the latest post page data for the post URL, which may include updated first comments
-    # and pagination info
     try:
         post_page_data: str = await get_post_page(
-            post_url=post.post_url, proxy=proxy_url, cookies=account.cookies
+            post_url=post.post_url, proxy=proxy_url
         )
     except Exception as exc:
-        logging.error(
-            "Failed to fetch post page for post=%s account=%s: %s",
-            post.post_url,
-            account.account_id,
-            exc,
-        )
+        logging.error("Failed to fetch post page for %s: %s", post.post_url, exc)
         if _should_dead_letter(post):
             return await _dead_letter(post, reason=f"post_page_fetch_failed: {exc}")
         return await _requeue(post, source_queue, reason="post_page_fetch_failed")
 
-    # Create the session
-    session = requests.Session(impersonate="chrome146", proxy=proxy_url)
-    # Add cookies to the session
-    session.cookies.update(account.cookies)
-
+    # ── Phase 3: extract tokens from the page ───────────────────────────
     post_id: str | None = await get_post_id(post_url=post.post_url)
-
-    # Page Parsing
     page_parser = PostPageParser()
-
-    # Extract the scripts from the HTML Page
 
     json_scripts: list[dict[str, Any]] = await page_parser.get_scripts_from_profile_page(
         html=post_page_data
     )
 
-    # Headers data for the API call
     header_data: HeaderRequirements = await page_parser.get_header_data(
         json_scripts=json_scripts, html=post_page_data
     )
 
-    # If the required header data is missing, it's likely that the page
-    #  fetch failed or we got blocked,
-    # so we should retry with a different account and proxy.
-    # If we've exhausted retries, dead-letter the post instead of re-queuing
     if not header_data.lsd_token or not header_data.dtsg_token:
         if _should_dead_letter(post):
             return await _dead_letter(
                 post,
-                reason=f"post_page_fetch_failed: {
-                    'lsd_token_missing' if not header_data.lsd_token else 'dtsg_token_missing'
-                }",
+                reason=f"post_page_fetch_failed: "
+                f"{'lsd_token_missing' if not header_data.lsd_token else 'dtsg_token_missing'}",
             )
         return await _requeue(post, source_queue, reason="post_page_fetch_failed")
 
-    # Data Payload for the API
     payload_data: DataRequirements = await page_parser.get_data_requirements(
-        json_scripts=json_scripts, lsd_token=header_data.lsd_token, fb_dtsg=header_data.dtsg_token
+        json_scripts=json_scripts,
+        lsd_token=header_data.lsd_token,
+        fb_dtsg=header_data.dtsg_token,
     )
 
-    is_reel_post: bool = _is_reel_url(post.post_url)
-
-    logging.info("Post %s identified as %s", post.post_url, "reel" if is_reel_post else "non-reel")
-
-    # The cursor shouldn't be a string for the initial reel comments query, but the pagination query
-    # , so we use its type to determine the initial query mode
-    query_mode = (
-        "initial_reel_comments"
-        if is_reel_post and isinstance(payload_data.cursor, str)
-        else "pagination"
-    )
-
+    is_reel = _is_reel_url(post.post_url)
     logging.info(
-        "Starting comment pagination for post=%s account=%s query_mode=%s",
+        "Post %s identified as %s — starting cookie-free pagination",
         post.post_url,
-        account.account_id,
-        query_mode,
+        "reel" if is_reel else "non-reel",
     )
 
-    # Extract all necessary fields for pagination from the page scripts and HTML
+    # ── Phase 4: pagination loop (per-page proxy rotation) ──────────────
     rate_limit_hits = 0
     consecutive_empty_pages = 0
-    _MAX_CONSECUTIVE_EMPTY = 2  # one genuine retry before giving up
-    while True:
+    page_count = 0
+
+    while page_count < _MAX_PAGINATION_DEPTH:
+        page_proxy = await get_random_proxy()
+
         try:
             api_response = await run_graphql_query(
                 csrf_token=header_data.csrf_token,
                 app_id=header_data.app_id,
                 media_id=payload_data.media_id,
                 post_id=post_id if post_id else payload_data.media_id,
-                comment_cursor_bifilter_token=payload_data.cursor,
-                query_mode=query_mode,
-                is_reel_post=is_reel_post,
-                cookies=account.cookies,
-                session=session,
-                proxy=proxy_url,
+                cursor=payload_data.cursor,
+                proxy=page_proxy,
                 lsd_token=payload_data.lsd_token,
                 hmac_claim=header_data.hmac_claim,
                 fb_dtsg=payload_data.fb_dtsg,
-                include_requested_with=True,
             )
         except Exception as exc:
             logging.error(
-                "GraphQL query failed for post=%s account=%s: %s",
+                "GraphQL query failed for post=%s page=%s: %s",
                 post.post_url,
-                account.account_id,
+                page_count,
                 exc,
             )
             if _should_dead_letter(post):
                 return await _dead_letter(post, reason=f"graphql_query_failed: {exc}")
             return await _requeue(post, source_queue, reason="graphql_query_failed")
 
-        # Classify the page response to determine if it's a valid JSON response,
-        # an HTML page (potentially a block or challenge),
+        page_count += 1
+
         body_text = api_response.text
         content_type = api_response.headers.get("content-type")
-
         kind: str = await classify_response(api_response.status_code, content_type, body_text)
 
         if kind == "json":
-            # If it's a JSON response, parse the body and search for the comment
             json_body = api_response.json()
             next_cursor, has_next_page = await parse_page_info(json_body=json_body)
             rate_limit_error = await extract_rate_limit_error(json_body=json_body)
@@ -299,105 +253,104 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
             if rate_limit_error:
                 rate_limit_hits += 1
                 logging.warning(
-                    "Rate limit hit %s/%s for post=%s account=%s. Details: %s",
+                    "Rate limit hit %s/%s for post=%s proxy=%s. Details: %s",
                     rate_limit_hits,
                     MAX_RATE_LIMIT_RETRIES,
                     post.post_url,
-                    account.account_id,
+                    page_proxy,
                     rate_limit_error,
                 )
                 if rate_limit_hits >= MAX_RATE_LIMIT_RETRIES:
-                    # Cursor state is preserved in post; the re-queued job will
-                    # resume pagination from the same point on the next attempt.
                     if _should_dead_letter(post):
                         return await _dead_letter(post, reason="rate_limit_exhausted")
                     return await _requeue(post, source_queue, reason="rate_limit_exhausted")
-                # Back off, then retry the same page from where we left off.
                 await asyncio.sleep(random.uniform(30, 60))
                 continue
 
-            else:
-                comments = await get_comments(json_body=json_body)
+            comments = await get_comments(json_body=json_body)
 
-                if not comments:
-                    consecutive_empty_pages += 1
-                    logging.info(
-                        "No comments in response for %s (consecutive empty: %s/%s).",
-                        post.post_url,
-                        consecutive_empty_pages,
-                        _MAX_CONSECUTIVE_EMPTY,
-                    )
-                    if consecutive_empty_pages >= _MAX_CONSECUTIVE_EMPTY:
-                        logging.info(
-                            "Consecutive empty page limit reached for %s. Ending pagination.",
-                            post.post_url,
-                        )
-                        return ScrapeResult(
-                            status=ScrapeStatus.NOT_FOUND,
-                            post_url=post.post_url,
-                            username=post.username,
-                            comment=None,
-                        )
-                    # Brief pause then retry the same cursor once.
-                    await asyncio.sleep(random.uniform(2, 5))
-                    continue
-
-                comment = await search_comment(
-                    comments=comments, username=post.username, post_url=post.post_url
+            if not comments:
+                consecutive_empty_pages += 1
+                logging.info(
+                    "No comments in response for %s (consecutive empty: %s/%s).",
+                    post.post_url,
+                    consecutive_empty_pages,
+                    _MAX_CONSECUTIVE_EMPTY,
                 )
-                consecutive_empty_pages = 0  # got real comments — reset the guard
-
-                if comment:
-                    return ScrapeResult(
-                        status=ScrapeStatus.FOUND,
-                        post_url=post.post_url,
-                        username=post.username,
-                        comment=comment,
-                    )
-
-                if not has_next_page:
+                if consecutive_empty_pages >= _MAX_CONSECUTIVE_EMPTY:
                     logging.info(
-                        f"No more pages to paginate for {post.post_url}. Ending pagination."
+                        "Consecutive empty page limit reached for %s. Ending pagination.",
+                        post.post_url,
                     )
-                    # Exit the loop and remove it from the processing queue
-                    await remove_url_from_processing_queue(post_url=post.post_url)
-
                     return ScrapeResult(
                         status=ScrapeStatus.NOT_FOUND,
                         post_url=post.post_url,
                         username=post.username,
                         comment=None,
                     )
+                await asyncio.sleep(random.uniform(2, 5))
+                continue
 
-                # Update the payload cursor for the next pagination request
-                if next_cursor:
-                    payload_data.cursor = next_cursor
-                    query_mode = "pagination"
+            comment = await search_comment(
+                comments=comments, username=post.username, post_url=post.post_url
+            )
+            consecutive_empty_pages = 0
 
-                    await asyncio.sleep(
-                        random.uniform(1, 3)
-                    )  # Sleep for a short duration before the next request
-                    # to avoid hitting rate limits
-                    continue
+            if comment:
+                comment = await _verify_reply_count(
+                    comment=comment,
+                    header_data=header_data,
+                    media_id=payload_data.media_id,
+                )
+                return ScrapeResult(
+                    status=ScrapeStatus.FOUND,
+                    post_url=post.post_url,
+                    username=post.username,
+                    comment=comment,
+                )
+
+            if not has_next_page:
+                logging.info("No more pages to paginate for %s.", post.post_url)
+                await remove_url_from_processing_queue(post_url=post.post_url)
+                return ScrapeResult(
+                    status=ScrapeStatus.NOT_FOUND,
+                    post_url=post.post_url,
+                    username=post.username,
+                    comment=None,
+                )
+
+            if next_cursor:
+                payload_data.cursor = next_cursor
+                await asyncio.sleep(random.uniform(0.3, 0.8))
+                continue
 
         elif kind == "html":
             logging.warning(
-                "Received HTML response (block/challenge) for post=%s account=%s.",
+                "Received HTML response (block/challenge) for post=%s proxy=%s.",
                 post.post_url,
-                account.account_id,
+                page_proxy,
             )
             if _should_dead_letter(post):
                 return await _dead_letter(post, reason="html_block_challenge")
             return await _requeue(post, source_queue, reason="html_block_challenge")
 
         else:
-            # Unknown response kind — don't spin; treat as a transient error.
             logging.error(
-                "Unknown response kind=%r for post=%s account=%s. Re-queuing.",
+                "Unknown response kind=%r for post=%s proxy=%s. Re-queuing.",
                 kind,
                 post.post_url,
-                account.account_id,
+                page_proxy,
             )
             if _should_dead_letter(post):
                 return await _dead_letter(post, reason=f"unknown_response_kind:{kind}")
             return await _requeue(post, source_queue, reason=f"unknown_response_kind:{kind}")
+
+    logging.warning(
+        "Max pagination depth (%s) reached for %s.", _MAX_PAGINATION_DEPTH, post.post_url
+    )
+    return ScrapeResult(
+        status=ScrapeStatus.NOT_FOUND,
+        post_url=post.post_url,
+        username=post.username,
+        comment=None,
+    )

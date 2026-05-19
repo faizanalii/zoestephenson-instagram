@@ -393,6 +393,33 @@ class SupabaseDB:
                 asyncio.get_running_loop().time() + self._min_write_interval_seconds
             )
 
+    async def is_post_processed_today(self, post_url: str) -> bool:
+        """
+        Return True if this post was already processed today (updated_at is today's date).
+        Used to skip posts that have already been scraped in the current cycle.
+        """
+        try:
+            today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            response = (
+                self.client.table(TABLE_NAME)
+                .select("updated_at")
+                .eq("post_url", post_url)
+                .limit(1)
+                .execute()
+            )
+            if response.data:
+                row = response.data[0]
+                if isinstance(row, dict):
+                    updated_at = row.get("updated_at")
+                else:
+                    updated_at = getattr(row, "updated_at", None)
+                if updated_at:
+                    updated_dt = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+                    return updated_dt >= today_start
+        except Exception:
+            pass
+        return False
+
     def comment_not_found(self, update: CommentNotFound) -> bool:
         """
         Mark that no comments were found for a video.

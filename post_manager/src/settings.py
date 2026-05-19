@@ -30,7 +30,7 @@ ERROR_TABLE_NAME = "instagram_error_videos"
 COMMENTS_FILE_PATH: str = "comments_data.json"
 
 # Sheets Credentials
-SHEETS_CREDENTIALS_FILE: str = "zoecredentials.json"
+SHEETS_CREDENTIALS_FILE: str = os.getenv("SHEETS_CREDENTIALS_FILE", "zoecredentials.json")
 
 # Account Cookies
 KEY_COOKIES_AVAILABLE = "cookies:available"
@@ -44,6 +44,13 @@ KEY_VIDEO_QUEUE_240 = "instagram:240"
 KEY_VIDEO_QUEUE_REST = "instagram:rest"
 PROCESSING_QUEUE: str = "instagram:processing"
 
-PROXY: str = "http://62570d546c329a5d28b4__cr.{COUNTRY}:b59a5a071a414fec@74.81.81.81:823"
+PROXY: str = os.getenv(
+    "PROXY",
+    "http://62570d546c329a5d28b4__cr.{COUNTRY}:7f100f701db20f32@74.81.81.81:823",
+)
 
-PROXY_COUNTRIES_LIST: list[str] = ["de", "be", "fr", "nl", "us", "gb", "ca", "au", "at"]
+PROXY_COUNTRIES_LIST: list[str] = [
+    c.strip()
+    for c in os.getenv("PROXY_COUNTRIES_LIST", "de,be,fr,nl,us,gb,ca,au,at").split(",")
+    if c.strip()
+]

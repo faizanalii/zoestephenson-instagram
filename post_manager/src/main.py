@@ -44,7 +44,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-POST_FETCH_BATCH_SIZE = int(os.getenv("POST_FETCH_BATCH_SIZE", "5"))
+POST_FETCH_BATCH_SIZE = int(os.getenv("POST_FETCH_BATCH_SIZE", "20"))
 
 
 def _chunked(items: list[tuple[str, str]], size: int) -> Iterable[list[tuple[str, str]]]:
@@ -226,4 +226,33 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    RUN_INTERVAL_SECONDS = int(os.getenv("POST_MANAGER_INTERVAL", "28800"))
+
+    if RUN_INTERVAL_SECONDS > 0:
+        logger.info(
+            "Scheduler mode: running every %s seconds (%s minutes)",
+            RUN_INTERVAL_SECONDS,
+            round(RUN_INTERVAL_SECONDS / 60, 1),
+        )
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            while True:
+                try:
+                    loop.run_until_complete(main())
+                except Exception as exc:
+                    logger.exception(
+                        "Post manager run crashed: %s. Retrying after sleep interval.",
+                        exc,
+                    )
+                logger.info(
+                    "Run complete. Sleeping for %s seconds until next cycle.",
+                    RUN_INTERVAL_SECONDS,
+                )
+                loop.run_until_complete(asyncio.sleep(RUN_INTERVAL_SECONDS))
+        except KeyboardInterrupt:
+            logger.info("Post manager scheduler stopped.")
+        finally:
+            loop.close()
+    else:
+        asyncio.run(main())

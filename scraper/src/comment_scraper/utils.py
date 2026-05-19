@@ -55,17 +55,31 @@ async def search_comment(
         node: dict[str, Any] = comment.get("node", {})
         if node.get("user", {}).get("username", "").lower() == username.lower():
             created_at_value = node.get("created_at", "")
+            comment_id = node.get("pk")
+            raw_text = node.get("text")
+
+            # Detect GIF / image comments. Instagram sets text to null
+            # or an empty string when the comment body is a GIF or image.
+            # The presence of giphy_media_info confirms it's a GIF.
+            if raw_text is None:
+                display_text = "GIF" if node.get("giphy_media_info") else "IMAGE/GIF"
+            elif raw_text == "" and node.get("giphy_media_info"):
+                display_text = "GIF"
+            elif raw_text == "":
+                display_text = ""
+            else:
+                display_text = raw_text
+
             return CommentStats(
                 post_url=post_url,
                 username=node.get("user", {}).get("username", ""),
-                # If the comment text is empty or None,
-                # Use a placeholder to indicate non-text content (e.g., images or GIFs).
-                text=node.get("text", "") if node.get("text") is not None else "IMAGE/GIF",
+                text=display_text,
                 likes=node.get("comment_like_count", 0),
                 reply_count=node.get("child_comment_count", 0)
                 if node.get("child_comment_count") is not None
                 else 0,
                 date_of_comment=_created_at_to_date(created_at_value),
+                comment_id=str(comment_id) if comment_id else None,
             )
     return None
 
@@ -264,7 +278,7 @@ class PostPageParser:
             csrf_token: list[str] = find_key(script, "csrf_token")
             if not csrf_token:
                 continue
-            return csrf_token[0]
+            return str(csrf_token[0])
 
         return None
 
@@ -284,7 +298,7 @@ class PostPageParser:
             if not app_id:
                 continue
 
-            return app_id[0]
+            return str(app_id[0])
 
         return None
 
@@ -304,7 +318,7 @@ class PostPageParser:
             if not media_id:
                 continue
 
-            return media_id[0]
+            return str(media_id[0])
 
         return None
 
@@ -334,10 +348,15 @@ class PostPageParser:
             cursor_raw: str = end_cursor[0]
             try:
                 cursor_data = json.loads(cursor_raw)
-                return cursor_data
-            except Exception:  # noqa: BLE001
-                # Instagram can emit end_cursor as an opaque string token.
-                return cursor_raw
+                if isinstance(cursor_data, dict):
+                    return cursor_data
+                # Plain JSON value (number, string) — not a valid cursor object.
+                return None
+            except Exception:
+                # Raw opaque token (base64, etc.) — unreliable for the
+                # initial GraphQL query. Start pagination fresh with an
+                # empty cursor; the response end_cursor drives subsequent pages.
+                return None
         logging.warning("No end_cursor found in any script")
         return None
 

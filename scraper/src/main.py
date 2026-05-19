@@ -19,7 +19,7 @@ import random
 import tempfile
 
 from src.comment_scraper import find_comment
-from src.google_sheets.output_sheets import flush_buffer
+from src.google_sheets.output_sheets import flush_buffer, push_comment_data
 from src.models import (
     CommentNotFound,
     CommentStats,
@@ -172,6 +172,11 @@ async def main(queue_key: str) -> None:
         if not post_job:
             break
 
+        # Skip if already processed today — one scrape per post per day
+        if await db.is_post_processed_today(post_job.post_url):
+            logger.info("Post %s already processed today — skipping.", post_job.post_url)
+            continue
+
         # Add to processing queue as soon as we start handling this job.
         await add_url_to_processing_queue(post_job)
 
@@ -236,12 +241,8 @@ async def main(queue_key: str) -> None:
                     f"L: {comment.likes}, R: {comment.reply_count}"
                 )
 
-                # TODO: Push the comment to the google sheet
                 # Push comment to Google Sheets buffer
-                # sheets_ok = await push_comment_data(comment_stats=comment)
-                # TODO: Remove the sheet ok afterwatds
-
-                sheets_ok = True  # --- IGNORE ---
+                sheets_ok = await push_comment_data(comment_stats=comment)
 
                 if sheets_ok:
                     # Persist immediately so post_manager can see this post as processed today.
@@ -301,8 +302,8 @@ async def main(queue_key: str) -> None:
                 )
                 error_count += 1
 
-            # Add a small delay between requests
-            await asyncio.sleep(random.uniform(0.5, 1.5))
+            # Add a small delay between posts
+            await asyncio.sleep(random.uniform(0.2, 0.5))
 
         except Exception:
             logger.exception(
@@ -424,22 +425,40 @@ async def main(queue_key: str) -> None:
 
 if __name__ == "__main__":
 
-    async def run_all_queues_once() -> None:
+    async def _run_all_queues_once() -> None:
         queue_keys = [
             KEY_VIDEO_QUEUE_40,
             KEY_VIDEO_QUEUE_120,
             KEY_VIDEO_QUEUE_240,
             KEY_VIDEO_QUEUE_REST,
         ]
-        logger.info("Checking all queues in parallel...")
+        logger.info("Processing all queues in parallel...")
         await asyncio.gather(*(main(queue_key=queue_key) for queue_key in queue_keys))
-        logger.info("Finished processing all queues for this cycle.")
+        logger.info("Finished processing all queues.")
 
-    async def run_forever() -> None:
+    async def _run_scheduled(interval_seconds: int) -> None:
         while True:
-            await run_all_queues_once()
-            # Delay before next full cycle through queues.
-            logger.info("Waiting before next queue cycle...")
-            await asyncio.sleep(100)
+            try:
+                await _run_all_queues_once()
+            except Exception as exc:
+                logger.exception("Queue cycle crashed: %s. Retrying after sleep.", exc)
+            logger.info(
+                "Sleeping %s seconds (%s minutes) until next cycle.",
+                interval_seconds,
+                round(interval_seconds / 60, 1),
+            )
+            await asyncio.sleep(interval_seconds)
 
-    asyncio.run(run_forever())
+    RUN_INTERVAL = int(os.getenv("SCRAPER_INTERVAL", "10800"))
+
+    if RUN_INTERVAL <= 0:
+        logger.info("Continuous mode (RUN_INTERVAL_SECONDS=0 or unset).")
+        # Legacy: loop continuously with short sleep
+        asyncio.run(_run_scheduled(100))
+    else:
+        logger.info(
+            "Scheduled mode: running every %s seconds (%s minutes).",
+            RUN_INTERVAL,
+            round(RUN_INTERVAL / 60, 1),
+        )
+        asyncio.run(_run_scheduled(RUN_INTERVAL))
