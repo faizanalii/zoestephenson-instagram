@@ -160,7 +160,5 @@ async def get_child_comment_count(
         return len(edges)
 
     except Exception:
-        logging.exception(
-            "Failed to fetch child comment count for comment=%s", parent_comment_id
-        )
+        logging.exception("Failed to fetch child comment count for comment=%s", parent_comment_id)
         return 0

@@ -124,8 +124,7 @@ async def _verify_reply_count(
             proxy=await get_random_proxy(),
         )
         logging.info(
-            "Child-comment API returned %s replies for comment=%s "
-            "(original reply_count=%s)",
+            "Child-comment API returned %s replies for comment=%s (original reply_count=%s)",
             verified_count,
             comment.comment_id,
             comment.reply_count,
@@ -165,9 +164,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
     proxy_url: str = await get_random_proxy()
 
     try:
-        post_page_data: str = await get_post_page(
-            post_url=post.post_url, proxy=proxy_url
-        )
+        post_page_data: str = await get_post_page(post_url=post.post_url, proxy=proxy_url)
     except Exception as exc:
         logging.error("Failed to fetch post page for %s: %s", post.post_url, exc)
         if _should_dead_letter(post):
@@ -321,7 +318,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
 
             if next_cursor:
                 payload_data.cursor = next_cursor
-                await asyncio.sleep(random.uniform(0.3, 0.8))
+                await asyncio.sleep(random.uniform(1, 3))
                 continue
 
         elif kind == "html":
