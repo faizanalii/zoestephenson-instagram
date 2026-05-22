@@ -19,8 +19,8 @@ from curl_cffi import requests
 from curl_cffi.requests.models import Response
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-CHILD_COMMENTS_DOC_ID = "34884685271179117"
 CHILD_COMMENTS_FRIENDLY_NAME = "PolarisPostChildCommentsQuery"
+_FALLBACK_CHILD_COMMENTS_DOC_ID = "27130774429946606"
 
 
 async def build_child_comments_headers(
@@ -51,6 +51,7 @@ async def build_child_comments_data(
     media_id: str,
     parent_comment_id: str,
     lsd_token: str | None = None,
+    doc_id: str | None = None,
 ) -> dict[str, str]:
     """Build the POST body for the child comments GraphQL request."""
     variables = {
@@ -72,7 +73,7 @@ async def build_child_comments_data(
         "fb_api_req_friendly_name": CHILD_COMMENTS_FRIENDLY_NAME,
         "server_timestamps": "true",
         "variables": json.dumps(variables),
-        "doc_id": CHILD_COMMENTS_DOC_ID,
+        "doc_id": doc_id or _FALLBACK_CHILD_COMMENTS_DOC_ID,
     }
     if lsd_token:
         data["lsd"] = lsd_token
@@ -106,6 +107,7 @@ async def get_child_comment_count(
     lsd_token: str | None = None,
     proxy: str | None = None,
     timeout: float = 30.0,
+    doc_id: str | None = None,
 ) -> int:
     """
     Get the number of child comments (replies) for a parent comment.
@@ -134,6 +136,7 @@ async def get_child_comment_count(
         media_id=media_id,
         parent_comment_id=parent_comment_id,
         lsd_token=lsd_token,
+        doc_id=doc_id,
     )
 
     try:

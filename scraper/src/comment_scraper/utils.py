@@ -2,6 +2,7 @@
 Utility functions for the comment scraper module.
 """
 
+import asyncio
 import json
 import logging
 import random
@@ -10,10 +11,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from bs4 import BeautifulSoup
+from curl_cffi import requests as cffi_requests
 from jsonparse import find_key
 
 from src.models import CommentStats, DataRequirements, HeaderRequirements
-from src.settings import PROXY, PROXY_COUNTRIES_LIST
+from src.settings import PROXY, PROXY_COUNTRIES_LIST, RELAY_CHUNK_URL
 
 RATE_LIMIT_ERROR_CODE = 1675004
 
@@ -204,6 +206,30 @@ async def extract_rate_limit_error(json_body: dict[str, Any]) -> dict[str, Any] 
     return None
 
 
+async def extract_general_errors(json_body: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Extract non-rate-limit errors from the GraphQL response payload.
+    Args:
+        json_body: The JSON payload from the GraphQL response.
+    Returns:
+        A list of error dictionaries (excluding rate-limit errors).
+    """
+    errors = json_body.get("errors")
+    if not isinstance(errors, list):
+        return []
+
+    general_errors: list[dict[str, Any]] = []
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        code = error.get("code")
+        message = str(error.get("message", ""))
+        if code == RATE_LIMIT_ERROR_CODE or "rate limit exceeded" in message.lower():
+            continue
+        general_errors.append(error)
+    return general_errors
+
+
 async def get_comments(json_body: dict[str, Any]) -> list[dict[str, Any]] | None:
     """
     Extract the list of comments from the GraphQL response JSON body.
@@ -232,11 +258,152 @@ class PostPageParser:
     such as first comments, pagination info, and retry timing.
     """
 
+    _FALLBACK_DOC_IDS: dict[str, str] = {
+        "PolarisPostCommentsPaginationQuery": "26864966453197043",
+        "PolarisPostChildCommentsQuery": "27130774429946606",
+    }
+
     def __init__(self) -> None:
-        """
-        Initialize any necessary data structures or configurations for the parser.
-        """
         pass
+
+    @staticmethod
+    def _looks_like_doc_id(value: str) -> bool:
+        return bool(re.fullmatch(r"\d{15,25}", str(value)))
+
+    @classmethod
+    async def get_doc_id(
+        cls,
+        friendly_name: str,
+        json_scripts: list[dict[str, Any]],
+        html: str,
+    ) -> str:
+        """
+        Extract the GraphQL doc_id for a given friendly name from the page.
+
+        Searches JSON script blocks first, then falls back to regex on the raw
+        HTML, then to hardcoded fallback values.
+        """
+
+        for script in json_scripts:
+            candidates: list = find_key(script, friendly_name)
+            if not candidates:
+                continue
+            for candidate in candidates:
+                if cls._looks_like_doc_id(str(candidate)):
+                    logging.info(
+                        "Extracted doc_id via find_key for %s: %s",
+                        friendly_name,
+                        candidate,
+                    )
+                    return str(candidate)
+                if isinstance(candidate, dict):
+                    for v in candidate.values():
+                        if cls._looks_like_doc_id(str(v)):
+                            logging.info(
+                                "Extracted doc_id via dict value for %s: %s",
+                                friendly_name,
+                                v,
+                            )
+                            return str(v)
+
+        patterns = [
+            rf'"{re.escape(friendly_name)}"[\]\s:,]*"?(\d{{15,25}})"?',
+            rf"{re.escape(friendly_name)}[\]\s:,]*\"?(\d{{15,25}})\"?",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html)
+            if match:
+                doc_id = match.group(1)
+                logging.info(
+                    "Extracted doc_id via regex for %s: %s",
+                    friendly_name,
+                    doc_id,
+                )
+                return doc_id
+
+        # ── Search CDN JS chunks for relay operation definitions ─────────
+        relay_module_name = f"{friendly_name}_instagramRelayOperation"
+        cdn_urls: set[str] = set(
+            re.findall(
+                r"https?://static\.cdninstagram\.com/rsrc\.php/[^\s\"'<>]+\.js",
+                html,
+            )
+        )
+
+        for url in cdn_urls:
+            try:
+                resp = await asyncio.to_thread(
+                    cffi_requests.get, url, impersonate="chrome142", timeout=10
+                )
+                if resp.status_code != 200:
+                    continue
+                text = resp.text
+            except Exception:
+                continue
+
+            if relay_module_name in text:
+                idx = text.find(relay_module_name)
+                m = re.search(
+                    r'a\.exports\s*=\s*"(\d+)"', text[idx : idx + 300]
+                )
+                if m:
+                    doc_id = m.group(1)
+                    logging.info(
+                        "Extracted doc_id via CDN chunk for %s: %s",
+                        friendly_name,
+                        doc_id,
+                    )
+                    return doc_id
+
+                m = re.search(r'(\d{15,25})', text[idx : idx + 300])
+                if m:
+                    doc_id = m.group(1)
+                    logging.info(
+                        "Extracted doc_id via CDN chunk (fallback match) for %s: %s",
+                        friendly_name,
+                        doc_id,
+                    )
+                    return doc_id
+
+        # ── Try the known relay chunk URL (lazy-loaded JS chunk) ──────────
+        if RELAY_CHUNK_URL:
+            try:
+                resp = await asyncio.to_thread(
+                    cffi_requests.get,
+                    RELAY_CHUNK_URL,
+                    impersonate="chrome142",
+                    timeout=10,
+                    headers={
+                        "accept": "*/*",
+                        "sec-fetch-dest": "script",
+                        "sec-fetch-mode": "cors",
+                        "sec-fetch-site": "cross-site",
+                    },
+                )
+                if resp.status_code == 200 and relay_module_name in resp.text:
+                    idx = resp.text.find(relay_module_name)
+                    m = re.search(
+                        r'a\.exports\s*=\s*"(\d+)"', resp.text[idx : idx + 300]
+                    )
+                    if m:
+                        doc_id = m.group(1)
+                        logging.info(
+                            "Extracted doc_id via relay chunk for %s: %s",
+                            friendly_name,
+                            doc_id,
+                        )
+                        return doc_id
+            except Exception:
+                pass
+
+        fallback = cls._FALLBACK_DOC_IDS.get(friendly_name, "")
+        if fallback:
+            logging.info(
+                "Using pre-configured doc_id for %s: %s",
+                friendly_name,
+                fallback,
+            )
+        return fallback
 
     async def get_scripts_from_profile_page(self, html: str) -> list[dict[str, Any]]:
         """

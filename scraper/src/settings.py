@@ -73,3 +73,16 @@ MAX_PAGINATION_DEPTH: int = int(os.getenv("MAX_PAGINATION_DEPTH", "300"))
 
 # Maximum consecutive rate-limit (429) hits before giving up and re-queuing.
 MAX_RATE_LIMIT_RETRIES: int = int(os.getenv("MAX_RATE_LIMIT_RETRIES", "3"))
+
+# CDN chunk URL that contains GraphQL relay operation doc_id definitions.
+# This is the lazy-loaded JS chunk containing __d("{name}_instagramRelayOperation")
+# definitions. Captured from browser DevTools network tab when scrolling comments.
+# When Instagram deploys new code, update this URL to the new chunk location.
+RELAY_CHUNK_URL: str = os.getenv(
+    "RELAY_CHUNK_URL",
+    "https://static.cdninstagram.com/rsrc.php/v4ir1B4/yf/l/en_US/"
+    "3pfO_g_UmADpv0ZRpjqU2vbvh-DSn3KpGMJ8qdfPMSUvjmj7O1NCQ0GxOlTs1mlnsYkKaLMRJQf5"
+    "m2B2IhwIQYBICX4MazNkpQOJukPWKTRotw8qPq28TpjX__Ff2gDEd3ZIiwu8JNldBM6Fw_LixFc"
+    "wY_VetyZteBA--oHzgKc9VKv3WNAk3lZFlO0ll4ra9J6n_ontF9et0rqAS5l8-a4spno_DHQ4u"
+    "mdzDoswbo8dYeGqzS3h4EJiTNPScjzRmw-ldPO22QvaFuFuCyR.js",
+)

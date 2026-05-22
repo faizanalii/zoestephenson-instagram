@@ -31,15 +31,16 @@ from src.redis_client import (
     push_post_to_queue,
     remove_url_from_processing_queue,
 )
-from src.settings import MAX_RATE_LIMIT_RETRIES, MAX_RETRIES
+from src.settings import MAX_PAGINATION_DEPTH, MAX_RATE_LIMIT_RETRIES, MAX_RETRIES
 from src.supabase_client import push_error_post
 
-from .child_comments import get_child_comment_count
-from .ig_query_client import run_graphql_query
+from .child_comments import CHILD_COMMENTS_FRIENDLY_NAME, get_child_comment_count
+from .ig_query_client import PAGINATION_FRIENDLY_NAME, run_graphql_query
 from .post_page import _is_reel_url, get_post_page
 from .utils import (
     PostPageParser,
     classify_response,
+    extract_general_errors,
     extract_rate_limit_error,
     get_comments,
     get_post_id,
@@ -49,7 +50,6 @@ from .utils import (
 )
 
 _MAX_CONSECUTIVE_EMPTY = 2
-_MAX_PAGINATION_DEPTH = 300
 
 
 def _should_dead_letter(post: Post) -> bool:
@@ -101,6 +101,7 @@ async def _verify_reply_count(
     comment: CommentStats,
     header_data: HeaderRequirements,
     media_id: str,
+    child_doc_id: str | None = None,
 ) -> CommentStats:
     """
     Verify / correct the reply_count via the child-comments API.
@@ -122,6 +123,7 @@ async def _verify_reply_count(
             app_id=header_data.app_id,
             lsd_token=header_data.lsd_token,
             proxy=await get_random_proxy(),
+            doc_id=child_doc_id,
         )
         logging.info(
             "Child-comment API returned %s replies for comment=%s (original reply_count=%s)",
@@ -205,12 +207,24 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
         "reel" if is_reel else "non-reel",
     )
 
+    # ── Extract GraphQL doc_ids from the page (prevents breakage on rotation) ──
+    pagination_doc_id = await page_parser.get_doc_id(
+        friendly_name=PAGINATION_FRIENDLY_NAME,
+        json_scripts=json_scripts,
+        html=post_page_data,
+    )
+    child_doc_id = await page_parser.get_doc_id(
+        friendly_name=CHILD_COMMENTS_FRIENDLY_NAME,
+        json_scripts=json_scripts,
+        html=post_page_data,
+    )
+
     # ── Phase 4: pagination loop (per-page proxy rotation) ──────────────
     rate_limit_hits = 0
     consecutive_empty_pages = 0
     page_count = 0
 
-    while page_count < _MAX_PAGINATION_DEPTH:
+    while page_count < MAX_PAGINATION_DEPTH:
         page_proxy = await get_random_proxy()
 
         try:
@@ -224,6 +238,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
                 lsd_token=payload_data.lsd_token,
                 hmac_claim=header_data.hmac_claim,
                 fb_dtsg=payload_data.fb_dtsg,
+                doc_id=pagination_doc_id,
             )
         except Exception as exc:
             logging.error(
@@ -246,6 +261,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
             json_body = api_response.json()
             next_cursor, has_next_page = await parse_page_info(json_body=json_body)
             rate_limit_error = await extract_rate_limit_error(json_body=json_body)
+            general_errors = await extract_general_errors(json_body=json_body)
 
             if rate_limit_error:
                 rate_limit_hits += 1
@@ -264,16 +280,38 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
                 await asyncio.sleep(random.uniform(30, 60))
                 continue
 
+            if general_errors:
+                error_msgs = "; ".join(
+                    str(e.get("message", ""))[:120] for e in general_errors
+                )
+                logging.warning(
+                    "GraphQL errors for post=%s page=%s: %s",
+                    post.post_url,
+                    page_count,
+                    error_msgs,
+                )
+                if _should_dead_letter(post):
+                    return await _dead_letter(post, reason=f"graphql_errors: {error_msgs}")
+                return await _requeue(post, source_queue, reason=f"graphql_errors: {error_msgs}")
+
             comments = await get_comments(json_body=json_body)
 
             if not comments:
                 consecutive_empty_pages += 1
-                logging.info(
-                    "No comments in response for %s (consecutive empty: %s/%s).",
-                    post.post_url,
-                    consecutive_empty_pages,
-                    _MAX_CONSECUTIVE_EMPTY,
-                )
+                if page_count <= 1:
+                    logging.warning(
+                        "No comments in response for %s (page %s). Response preview: %s",
+                        post.post_url,
+                        page_count,
+                        body_text[:500],
+                    )
+                else:
+                    logging.info(
+                        "No comments in response for %s (consecutive empty: %s/%s).",
+                        post.post_url,
+                        consecutive_empty_pages,
+                        _MAX_CONSECUTIVE_EMPTY,
+                    )
                 if consecutive_empty_pages >= _MAX_CONSECUTIVE_EMPTY:
                     logging.info(
                         "Consecutive empty page limit reached for %s. Ending pagination.",
@@ -298,6 +336,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
                     comment=comment,
                     header_data=header_data,
                     media_id=payload_data.media_id,
+                    child_doc_id=child_doc_id,
                 )
                 return ScrapeResult(
                     status=ScrapeStatus.FOUND,
@@ -343,7 +382,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
             return await _requeue(post, source_queue, reason=f"unknown_response_kind:{kind}")
 
     logging.warning(
-        "Max pagination depth (%s) reached for %s.", _MAX_PAGINATION_DEPTH, post.post_url
+        "Max pagination depth (%s) reached for %s.", MAX_PAGINATION_DEPTH, post.post_url
     )
     return ScrapeResult(
         status=ScrapeStatus.NOT_FOUND,

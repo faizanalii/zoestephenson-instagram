@@ -15,8 +15,8 @@ from curl_cffi import requests
 from curl_cffi.requests.models import Response
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-PAGINATION_DOC_ID = "26224338453892885"
 PAGINATION_FRIENDLY_NAME = "PolarisPostCommentsPaginationQuery"
+_FALLBACK_PAGINATION_DOC_ID = "26864966453197043"
 
 
 async def build_headers(
@@ -70,6 +70,7 @@ async def build_query_data(
     cursor: dict[str, Any] | str | None,
     fb_dtsg: str | None = None,
     lsd_token: str | None = None,
+    doc_id: str | None = None,
 ) -> dict[str, str]:
     """
     Build the POST body for the GraphQL comments query.
@@ -98,7 +99,7 @@ async def build_query_data(
         "fb_api_req_friendly_name": PAGINATION_FRIENDLY_NAME,
         "variables": json.dumps(variables),
         "server_timestamps": "true",
-        "doc_id": PAGINATION_DOC_ID,
+        "doc_id": doc_id or _FALLBACK_PAGINATION_DOC_ID,
     }
     if fb_dtsg:
         data["fb_dtsg"] = fb_dtsg
@@ -118,6 +119,7 @@ async def run_graphql_query(
     lsd_token: str | None = None,
     hmac_claim: str | None = None,
     fb_dtsg: str | None = None,
+    doc_id: str | None = None,
     session: requests.Session | None = None,
     timeout: float | None = None,
 ) -> Response:
@@ -154,6 +156,7 @@ async def run_graphql_query(
         cursor=cursor,
         fb_dtsg=fb_dtsg,
         lsd_token=lsd_token,
+        doc_id=doc_id,
     )
 
     call = session.post if session else requests.post
