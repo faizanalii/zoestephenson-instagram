@@ -127,7 +127,7 @@ class CommentStats(BaseModel):
     date_of_comment: str = Field(
         ..., description="Date of the comment"
     )  # Convert the timestamp (1748573540) to a string in the format "YYYY-MM-DD" when creating an instance of CommentStats.
-    date: str = Field(default=datetime.now().strftime("%Y-%m-%d"))
+    date: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
 
 
 class ScrapeStatus(str, Enum):

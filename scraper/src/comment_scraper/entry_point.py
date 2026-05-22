@@ -258,7 +258,17 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
         kind: str = await classify_response(api_response.status_code, content_type, body_text)
 
         if kind == "json":
-            json_body = api_response.json()
+            try:
+                json_body = api_response.json()
+            except Exception:
+                logging.warning(
+                    "Invalid JSON in GraphQL response for post=%s page=%s. Re-queuing.",
+                    post.post_url,
+                    page_count,
+                )
+                if _should_dead_letter(post):
+                    return await _dead_letter(post, reason="invalid_json_response")
+                return await _requeue(post, source_queue, reason="invalid_json_response")
             next_cursor, has_next_page = await parse_page_info(json_body=json_body)
             rate_limit_error = await extract_rate_limit_error(json_body=json_body)
             general_errors = await extract_general_errors(json_body=json_body)

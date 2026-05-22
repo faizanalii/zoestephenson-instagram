@@ -89,15 +89,12 @@ async def search_comment(
 async def get_random_proxy() -> str:
     """
     Get a random proxy from the list of available proxies.
-    Args:
-    Returns:
-        str: A random proxy string.
+    Returns empty string if no proxy is configured.
     """
-    # TODO: Disabled the proxy for now
-    # return ""
+    if not PROXY or not PROXY_COUNTRIES_LIST:
+        return ""
     country: str = random.choice(PROXY_COUNTRIES_LIST)
     proxy_url: str = PROXY.format(COUNTRY=country)
-
     return proxy_url
 
 
@@ -323,29 +320,33 @@ class PostPageParser:
 
         # ── Search CDN JS chunks for relay operation definitions ─────────
         relay_module_name = f"{friendly_name}_instagramRelayOperation"
-        cdn_urls: set[str] = set(
-            re.findall(
-                r"https?://static\.cdninstagram\.com/rsrc\.php/[^\s\"'<>]+\.js",
-                html,
+        cdn_urls: list[str] = list(
+            set(
+                re.findall(
+                    r"https?://static\.cdninstagram\.com/rsrc\.php/[^\s\"'<>]+\.js",
+                    html,
+                )
             )
         )
 
-        for url in cdn_urls:
+        async def _fetch_cdn_chunk(url: str) -> str | None:
             try:
                 resp = await asyncio.to_thread(
                     cffi_requests.get, url, impersonate="chrome142", timeout=10
                 )
-                if resp.status_code != 200:
-                    continue
-                text = resp.text
+                if resp.status_code == 200 and relay_module_name in resp.text:
+                    return resp.text
             except Exception:
-                continue
+                pass
+            return None
 
-            if relay_module_name in text:
+        if cdn_urls:
+            results = await asyncio.gather(*(_fetch_cdn_chunk(url) for url in cdn_urls))
+            for text in results:
+                if text is None:
+                    continue
                 idx = text.find(relay_module_name)
-                m = re.search(
-                    r'a\.exports\s*=\s*"(\d+)"', text[idx : idx + 300]
-                )
+                m = re.search(r'a\.exports\s*=\s*"(\d+)"', text[idx : idx + 300])
                 if m:
                     doc_id = m.group(1)
                     logging.info(
@@ -355,7 +356,7 @@ class PostPageParser:
                     )
                     return doc_id
 
-                m = re.search(r'(\d{15,25})', text[idx : idx + 300])
+                m = re.search(r"(\d{15,25})", text[idx : idx + 300])
                 if m:
                     doc_id = m.group(1)
                     logging.info(
@@ -382,9 +383,7 @@ class PostPageParser:
                 )
                 if resp.status_code == 200 and relay_module_name in resp.text:
                     idx = resp.text.find(relay_module_name)
-                    m = re.search(
-                        r'a\.exports\s*=\s*"(\d+)"', resp.text[idx : idx + 300]
-                    )
+                    m = re.search(r'a\.exports\s*=\s*"(\d+)"', resp.text[idx : idx + 300])
                     if m:
                         doc_id = m.group(1)
                         logging.info(

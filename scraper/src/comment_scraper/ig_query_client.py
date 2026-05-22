@@ -176,7 +176,7 @@ async def run_graphql_query(
     if response.status_code != 200:
         raise Exception(
             f"GraphQL query failed with status code {response.status_code}"
-            f" and response: {response.text}"
+            f" and response: {response.text[:200]}"
         )
 
     return response
