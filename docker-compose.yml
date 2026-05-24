@@ -49,7 +49,7 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  # ── Scrapers (3 parallel consumers — every 3 hours) ─────────────────────
+  # ── Scrapers (5 parallel consumers — every 3 hours) ─────────────────────
   scraper_1:
     <<: *scraper-defaults
     container_name: ig-scraper-1
@@ -61,3 +61,12 @@ services:
   scraper_3:
     <<: *scraper-defaults
     container_name: ig-scraper-3
+
+  scraper_4:
+    <<: *scraper-defaults
+    container_name: ig-scraper-4
+
+  scraper_5:
+    <<: *scraper-defaults
+    container_name: ig-scraper-5
+  
