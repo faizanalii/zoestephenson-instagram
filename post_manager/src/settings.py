@@ -44,13 +44,9 @@ KEY_VIDEO_QUEUE_240 = "instagram:240"
 KEY_VIDEO_QUEUE_REST = "instagram:rest"
 PROCESSING_QUEUE: str = "instagram:processing"
 
-PROXY: str = os.getenv(
-    "PROXY",
-    "http://62570d546c329a5d28b4__cr.{COUNTRY}:7f100f701db20f32@74.81.81.81:823",
-)
-
+PROXY: str = os.getenv("PROXY", "")
 PROXY_COUNTRIES_LIST: list[str] = [
     c.strip()
-    for c in os.getenv("PROXY_COUNTRIES_LIST", "de,be,fr,nl,us,gb,ca,au,at").split(",")
+    for c in os.getenv("PROXY_COUNTRIES_LIST", "").split(",")
     if c.strip()
 ]

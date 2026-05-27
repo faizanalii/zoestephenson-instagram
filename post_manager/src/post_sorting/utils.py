@@ -14,6 +14,8 @@ from src.settings import PROXY, PROXY_COUNTRIES_LIST
 
 
 async def get_random_proxy() -> str:
+    if not PROXY or not PROXY_COUNTRIES_LIST:
+        return ""
     country: str = random.choice(PROXY_COUNTRIES_LIST)
     proxy_url: str = PROXY.format(COUNTRY=country)
     return proxy_url

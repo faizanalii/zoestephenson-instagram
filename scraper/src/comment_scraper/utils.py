@@ -91,8 +91,10 @@ async def get_random_proxy() -> str:
     Get a random proxy from the list of available proxies.
     Returns empty string if no proxy is configured.
     """
-    if not PROXY or not PROXY_COUNTRIES_LIST:
+    if not PROXY:
         return ""
+    if not PROXY_COUNTRIES_LIST:
+        return PROXY
     country: str = random.choice(PROXY_COUNTRIES_LIST)
     proxy_url: str = PROXY.format(COUNTRY=country)
     return proxy_url
