@@ -23,3 +23,6 @@ creds.json
 .env
 !.env.example
 creds.txt
+session*.md
+disabled*.md
+disscussion*.md

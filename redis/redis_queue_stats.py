@@ -4,14 +4,15 @@ Docstring for redis_queue_stats
 
 import os
 
-import redis
 from dotenv import load_dotenv
 
+import redis
+
 load_dotenv()
-KEY_COOKIES_AVAILABLE = "cookies:available"
-KEY_COOKIES_IN_USE = "cookies:in_use"
-KEY_COOKIES_DEAD = "cookies:dead"
-TASK_STATE_PREFIX: str = "instagram:task_state"
+KEY_TOKENS_AVAILABLE = "cookies:available"
+KEY_TOKENS_IN_USE = "cookies:in_use"
+KEY_TOKENS_DEAD = "cookies:dead"
+
 # Video Queues by priority
 # Redis key names
 KEY_VIDEO_QUEUE_40 = "instagram:40"
@@ -51,15 +52,14 @@ def random_video_urlfrom_queue(queue_key: str = KEY_VIDEO_QUEUE_40) -> None:
 def print_queue_stats():
     r = get_redis_connection()
     keys = [
-        (KEY_COOKIES_AVAILABLE, "Cookies Available"),
-        (KEY_COOKIES_IN_USE, "Cookies In Use"),
-        (KEY_COOKIES_DEAD, "Cookies Dead"),
-        (KEY_VIDEO_QUEUE_40, "Video Queue ≤40"),
-        (KEY_VIDEO_QUEUE_120, "Video Queue ≤120"),
-        (KEY_VIDEO_QUEUE_240, "Video Queue ≤240"),
-        (KEY_VIDEO_QUEUE_REST, "Video Queue Rest"),
-        (PROCESSING_QUEUE, "Processing Queue"),
-        (TASK_STATE_PREFIX + "*", "Task States"),
+        (KEY_TOKENS_AVAILABLE, "Cookies Available"),
+        (KEY_TOKENS_IN_USE, "Cookies In Use"),
+        (KEY_TOKENS_DEAD, "Cookies Dead"),
+        (KEY_VIDEO_QUEUE_40, "Instagram Queue ≤40"),
+        (KEY_VIDEO_QUEUE_120, "Instagram Queue ≤120"),
+        (KEY_VIDEO_QUEUE_240, "Instagram Queue ≤240"),
+        (KEY_VIDEO_QUEUE_REST, "Instagram Queue Rest"),
+        (PROCESSING_QUEUE, "Instagram Processing Queue"),
     ]
 
     print("Redis Queue Stats:")

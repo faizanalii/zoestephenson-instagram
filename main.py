@@ -1,5 +1,5 @@
 def main():
-    print("Hello from redis!")
+    print("Hello from zoestephenson-instagram!")
 
 
 if __name__ == "__main__":

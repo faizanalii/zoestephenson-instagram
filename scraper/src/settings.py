@@ -51,9 +51,7 @@ TASK_STATE_PREFIX: str = "instagram:task_state"
 
 PROXY: str = os.getenv("PROXY", "")
 PROXY_COUNTRIES_LIST: list[str] = [
-    c.strip()
-    for c in os.getenv("PROXY_COUNTRIES_LIST", "").split(",")
-    if c.strip()
+    c.strip() for c in os.getenv("PROXY_COUNTRIES_LIST", "").split(",") if c.strip()
 ]
 
 # Retry behavior for comment scraping requeues.

@@ -291,9 +291,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
                 continue
 
             if general_errors:
-                error_msgs = "; ".join(
-                    str(e.get("message", ""))[:120] for e in general_errors
-                )
+                error_msgs = "; ".join(str(e.get("message", ""))[:120] for e in general_errors)
                 logging.warning(
                     "GraphQL errors for post=%s page=%s: %s",
                     post.post_url,
