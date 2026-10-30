@@ -15,8 +15,8 @@ from curl_cffi import requests
 from curl_cffi.requests.models import Response
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-PAGINATION_FRIENDLY_NAME = "PolarisPostCommentsPaginationQuery"
-_FALLBACK_PAGINATION_DOC_ID = "26864966453197043"
+PAGINATION_FRIENDLY_NAME = "PolarisLoggedOutDesktopWWWPostCommentsPaginationQuery"
+_FALLBACK_PAGINATION_DOC_ID = "27837656105907150"
 
 
 async def build_headers(
@@ -56,13 +56,28 @@ async def build_headers(
         "x-fb-friendly-name": PAGINATION_FRIENDLY_NAME,
         "x-ig-app-id": app_id,
         "x-requested-with": "XMLHttpRequest",
-        "x-root-field-name": "xdt_api__v1__media__media_id__comments__connection",
+        "x-root-field-name": "xig_polaris_media",
     }
     if lsd_token:
         headers["x-fb-lsd"] = lsd_token
     if hmac_claim:
         headers["x-ig-www-claim"] = hmac_claim
     return headers
+
+
+def _logged_out_after(cursor: dict[str, Any] | str | None) -> str | None:
+    """Return the logged-out pagination cursor, or None to start at the first page."""
+    if cursor is None:
+        return None
+    parsed: Any = cursor
+    if isinstance(cursor, str):
+        try:
+            parsed = json.loads(cursor)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(parsed, dict) and "server_cursor" in parsed:
+        return json.dumps(parsed)
+    return None
 
 
 async def build_query_data(
@@ -73,36 +88,35 @@ async def build_query_data(
     doc_id: str | None = None,
 ) -> dict[str, str]:
     """
-    Build the POST body for the GraphQL comments query.
+    Build the POST body for the logged-out comments query.
 
-    Uses the same doc_id and route for both posts and reels
-    (Apify scraper confirms this works for both media types).
+    The same document and variables work for posts and reels. ``fb_dtsg`` is
+    accepted for callers of the older query and is not sent.
     """
-    if isinstance(cursor, str):
-        after_cursor = cursor
-    else:
-        after_cursor = json.dumps(cursor or {})
+    _ = fb_dtsg
+    # Logged-out pagination only accepts its own server cursor. The bifilter
+    # cursor embedded in the post page belongs to the older comments query.
+    after_cursor = _logged_out_after(cursor)
+    bare_media_id = str(media_id).split("_", 1)[0]
 
     variables = {
         "after": after_cursor,
-        "before": None,
-        "first": 50,
-        "last": None,
-        "media_id": media_id,
-        "sort_order": "popular",
-        "__relay_internal__pv__PolarisIsLoggedInrelayprovider": True,
+        "first": 10,
+        "media_id": bare_media_id,
     }
 
     data: dict[str, str] = {
-        "__crn": "comet.igweb.PolarisDesktopPostRoute",
+        "av": "0",
+        "__d": "www",
+        "__user": "0",
+        "__a": "1",
+        "__comet_req": "7",
         "fb_api_caller_class": "RelayModern",
         "fb_api_req_friendly_name": PAGINATION_FRIENDLY_NAME,
         "variables": json.dumps(variables),
         "server_timestamps": "true",
         "doc_id": doc_id or _FALLBACK_PAGINATION_DOC_ID,
     }
-    if fb_dtsg:
-        data["fb_dtsg"] = fb_dtsg
     if lsd_token:
         data["lsd"] = lsd_token
     return data
@@ -171,7 +185,7 @@ async def run_graphql_query(
     if not session:
         kwargs["impersonate"] = "chrome142"
 
-    response = call("https://www.instagram.com/graphql/query", **kwargs)
+    response = call("https://www.instagram.com/api/graphql", **kwargs)
 
     if response.status_code != 200:
         raise Exception(

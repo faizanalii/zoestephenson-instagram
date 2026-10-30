@@ -223,6 +223,9 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
     rate_limit_hits = 0
     consecutive_empty_pages = 0
     page_count = 0
+    # Start at the first page. The cursor embedded in the HTML belongs to a
+    # different comments query and would skip comments.
+    comment_cursor = None
 
     while page_count < MAX_PAGINATION_DEPTH:
         page_proxy = await get_random_proxy()
@@ -233,7 +236,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
                 app_id=header_data.app_id,
                 media_id=payload_data.media_id,
                 post_id=post_id if post_id else payload_data.media_id,
-                cursor=payload_data.cursor,
+                cursor=comment_cursor,
                 proxy=page_proxy,
                 lsd_token=payload_data.lsd_token,
                 hmac_claim=header_data.hmac_claim,
@@ -364,7 +367,7 @@ async def find_comment(post: Post, source_queue: str) -> ScrapeResult:
                 )
 
             if next_cursor:
-                payload_data.cursor = next_cursor
+                comment_cursor = next_cursor
                 await asyncio.sleep(random.uniform(1, 3))
                 continue
 

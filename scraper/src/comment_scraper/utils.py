@@ -161,9 +161,7 @@ async def parse_page_info(
         whether there is a next page.
     """
 
-    connection: dict = json_body.get("data", {}).get(
-        "xdt_api__v1__media__media_id__comments__connection", {}
-    )
+    connection: dict = _comments_connection(json_body)
     page_info: dict = connection.get("page_info", {})
     cursor_raw: str | None = page_info.get("end_cursor")
     has_next_page: bool | None = page_info.get("has_next_page")
@@ -229,6 +227,18 @@ async def extract_general_errors(json_body: dict[str, Any]) -> list[dict[str, An
     return general_errors
 
 
+def _comments_connection(json_body: dict[str, Any]) -> dict[str, Any]:
+    """Return the comments connection from either the logged-out or legacy query."""
+    data = json_body.get("data")
+    if not isinstance(data, dict):
+        return {}
+    logged_out = data.get("xig_polaris_media")
+    if isinstance(logged_out, dict) and isinstance(logged_out.get("comments_connection"), dict):
+        return logged_out["comments_connection"]
+    legacy = data.get("xdt_api__v1__media__media_id__comments__connection")
+    return legacy if isinstance(legacy, dict) else {}
+
+
 async def get_comments(json_body: dict[str, Any]) -> list[dict[str, Any]] | None:
     """
     Extract the list of comments from the GraphQL response JSON body.
@@ -237,11 +247,7 @@ async def get_comments(json_body: dict[str, Any]) -> list[dict[str, Any]] | None
     Returns:
         A list of comment dictionaries if found, or None otherwise.
     """
-    return (
-        json_body.get("data", {})
-        .get("xdt_api__v1__media__media_id__comments__connection", {})
-        .get("edges", [])
-    )
+    return _comments_connection(json_body).get("edges", [])
 
 
 # -----
@@ -258,6 +264,7 @@ class PostPageParser:
     """
 
     _FALLBACK_DOC_IDS: dict[str, str] = {
+        "PolarisLoggedOutDesktopWWWPostCommentsPaginationQuery": "27837656105907150",
         "PolarisPostCommentsPaginationQuery": "26864966453197043",
         "PolarisPostChildCommentsQuery": "27130774429946606",
     }
