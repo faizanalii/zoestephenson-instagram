@@ -59,6 +59,8 @@ async def search_comment(
             created_at_value = node.get("created_at", "")
             comment_id = node.get("pk")
             raw_text = node.get("text")
+            raw_likes = node.get("comment_like_count")
+            raw_replies = node.get("child_comment_count")
 
             # Detect GIF / image comments. Instagram sets text to null
             # or an empty string when the comment body is a GIF or image.
@@ -76,10 +78,8 @@ async def search_comment(
                 post_url=post_url,
                 username=node.get("user", {}).get("username", ""),
                 text=display_text,
-                likes=node.get("comment_like_count", 0),
-                reply_count=node.get("child_comment_count", 0)
-                if node.get("child_comment_count") is not None
-                else 0,
+                likes=raw_likes if isinstance(raw_likes, int) else 0,
+                reply_count=raw_replies if isinstance(raw_replies, int) else 0,
                 date_of_comment=_created_at_to_date(created_at_value),
                 comment_id=str(comment_id) if comment_id else None,
             )
