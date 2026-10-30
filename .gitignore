@@ -20,9 +20,12 @@ build/
 zoecredentials.json
 tomsheetcreds.json
 creds.json
+redis/velvety-argon-*.json
 .env
 !.env.example
 creds.txt
 session*.md
 disabled*.md
 disscussion*.md
+comments*.json
+graphql*.json
